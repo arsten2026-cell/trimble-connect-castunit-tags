@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cast unit tags</title>
+<style>
+  :root { --bg:#f7f5f0; --ink:#1f1f1f; --muted:#6b6b6b; --line:#d9d5cc; --accent:#E37424; --tag:#C8102E; --ok:#2f7d32; --bad:#b3261e; --panel:#fff; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:12px; background:var(--bg); color:var(--ink); font:13px/1.4 Ubuntu, "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size:15px; margin:0 0 4px; font-weight:600; }
+  h2 { font-size:12px; margin:14px 0 6px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .status { font-size:12px; color:var(--muted); margin-bottom:10px; min-height:1.4em; }
+  .status.bad { color:var(--bad); }
+  .bar { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+  button { font:inherit; padding:6px 10px; border:1px solid var(--ink); background:var(--ink); color:#fff; cursor:pointer; border-radius:0; }
+  button.secondary { background:transparent; color:var(--ink); border-color:var(--line); }
+  button.small { padding:2px 7px; font-size:12px; }
+  button.on { background:var(--tag); border-color:var(--tag); color:#fff; }
+  button:disabled { opacity:.45; cursor:default; }
+  label.chk { display:inline-flex; align-items:center; gap:4px; margin:2px 10px 2px 0; font-size:12px; white-space:nowrap; }
+  select { font:inherit; font-size:12px; padding:1px 2px; border:1px solid var(--line); border-radius:0; background:#fff; }
+  input[type=number] { width:56px; font:inherit; padding:2px 4px; border:1px solid var(--line); border-radius:0; }
+  details { border-top:1px solid var(--line); padding-top:6px; margin-top:8px; }
+  summary { cursor:pointer; font-size:12px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; background:var(--panel); }
+  th, td { padding:5px 4px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { font-size:11px; font-weight:600; color:var(--muted); }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  /* Tag | Select | Focus: one compact segmented group under the pour name */
+  .acts { margin-top:4px; white-space:nowrap; }
+  .acts button.small { padding:1px 8px; font-size:11.5px; }
+  .acts button.small + button.small { margin-left:-1px; }
+  button.inspect { margin-left:8px; padding:0 6px; font-size:11px; vertical-align:1px; }
+  tr.insp > td { background:#faf8f3; padding:4px 4px 8px; }
+  .insphead { font-size:11px; color:var(--muted); display:flex; align-items:center; gap:8px; margin:2px 0 4px; }
+  table.rebars { width:auto; min-width:70%; background:transparent; font-size:11px; }
+  table.rebars th, table.rebars td { padding:1px 6px 1px 0; border-bottom:none; }
+  table.rebars tr.tot td { border-top:1px solid var(--line); font-weight:600; }
+  .pourlists { margin:2px 0 8px; padding:6px 8px; background:#fff; border:1px solid var(--line); }
+  .pourlists .lh { font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; margin:6px 0 3px; }
+  .pourlists .lh:first-child { margin-top:0; }
+  .sw { display:inline-block; width:10px; height:10px; margin-right:5px; vertical-align:-1px; border:1px solid rgba(0,0,0,.25); }
+  .name { font-weight:600; white-space:nowrap; }
+  .sub { font-size:11px; color:var(--muted); }
+  .emb { font-size:11px; color:var(--ink); }
+  tfoot td { font-weight:600; border-bottom:none; }
+  .mism { font-size:11px; color:var(--bad); margin-top:3px; }
+  .warn { background:#fff4e5; border:1px solid #f0c48a; padding:8px; font-size:12px; margin-top:6px; }
+  .empty { color:var(--muted); font-size:12px; padding:8px 0; }
+</style>
+</head>
+<body>
+<h1>Cast unit tags · Бетонови елементи</h1>
+<div id="status" class="status">Connecting to Trimble Connect…</div>
+
+<div class="bar">
+  <button id="btnShowAll" disabled>Show all tags</button>
+  <button id="btnClear" class="secondary" disabled>Clear tags</button>
+  <button id="btnReload" class="secondary" disabled title="Read the pours again from the loaded models">Reload</button>
+  <button id="btnClearFocus" class="on" hidden title="Make every object opaque again">Clear focus</button>
+</div>
+<div class="bar">
+  <label class="chk"><input type="checkbox" id="chkColour"> Colour each cast unit</label>
+  <label class="chk"><input type="checkbox" id="chkIsolate"> Show cast units only</label>
+</div>
+
+<details id="optLabel">
+  <summary>Label fields</summary>
+  <div id="fields" style="margin-top:6px"></div>
+  <div style="margin-top:6px">
+    <label class="chk">Language <select id="selLang"><option value="bg">Български</option><option value="en">English</option></select></label>
+    <label class="chk">Layout <select id="selLayout"><option value="lines">One field per line</option><option value="single">One line</option></select></label>
+  </div>
+  <div style="margin-top:6px"><label class="chk">Leader height <input type="number" id="numLift" min="0.5" max="50" step="0.5" value="3"> m</label>
+    <label class="chk" title="Pushes the label out, away from the middle of the site">Sideways <input type="number" id="numSide" min="0" max="50" step="0.5" value="3"> m</label></div>
+</details>
+
+<div id="cuWarn" class="warn" hidden></div>
+
+<h2>Cast units</h2>
+<table>
+  <thead><tr><th>Cast unit</th><th class="num">m³</th><th class="num">kg</th></tr></thead>
+  <tbody id="rows"><tr><td colspan="3" class="empty">No pours loaded yet.</td></tr></tbody>
+  <tfoot id="foot"></tfoot>
+</table>
+
+
+<script src="https://cdn.jsdelivr.net/npm/trimble-connect-workspace-api@0.3.38/dist/iife/trimbleconnect.workspace.api.js" integrity="sha384-lFiNt/56q6HnUNbuy0WHO3NP6BkQjY4EH8+5eELYVfnhkB42snRTmSa3UOAlX9gg" crossorigin="anonymous"></script>
+<script src="common.js?v=1"></script>
+<script src="castunits.js?v=1"></script>
+<script src="app.js?v=1"></script>
+</body>
+</html>
