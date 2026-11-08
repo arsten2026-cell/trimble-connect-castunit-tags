@@ -303,10 +303,16 @@
       $("foot").innerHTML = "";
       return;
     }
+    const firstLoose = state.units.findIndex((g) => !g.numbered);
+    const looseCount = state.units.filter((g) => !g.numbered).length;
     rows.innerHTML = state.units.map((g, i) => {
       const tagged = state.tags.has(g.key);
       const name = g.name.split("/")[0] || "–";
-      return `<tr>
+      // Unnumbered cast units (mark "(?)" or none) in their own section, like bare "TAKT" pours in Pour tags.
+      const head = i === firstLoose
+        ? `<tr class="sect"><td colspan="3"><h2>Not numbered (${looseCount})</h2><div class="warn">Marks ending in "(?)" mean Tekla numbering was not up to date at export, so these marks are placeholders: each cast unit is listed on its own. Run numbering in Tekla and export again to get real marks.</div></td></tr>`
+        : "";
+      return head + `<tr>
         <td>${state.coloured ? `<span class="sw" style="background:${g.colour}"></span>` : ""}<span class="name">${esc(g.label)}${g.instances.length > 1 ? ` ×${g.instances.length}` : ""}</span><button
             class="small inspect ${state.inspectKey === g.key ? "on" : "secondary"}" data-act="inspect" data-i="${i}" title="Rebar list of this cast unit">Inspect ${state.inspectKey === g.key ? "▴" : "▾"}</button>
           <div class="sub">${esc(name)}${g.positions.length ? " · " + esc(g.positions.slice(0, 4).join(", ")) + (g.positions.length > 4 ? " …" : "") : ""}${g.materials.length ? " · " + esc(g.materials.join(", ")) : ""}</div>

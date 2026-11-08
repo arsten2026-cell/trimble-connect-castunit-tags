@@ -41,7 +41,8 @@
       const key = u.modelId + "|" + (shared ? "M:" + mark : "#" + u.id);
       if (!groups.has(key)) {
         groups.set(key, {
-          key, mark, label: mark || "?", name: str(u.name), modelId: u.modelId, modelName: u.modelName || u.modelId,
+          key, mark, label: mark || "?", numbered: !!shared,   // false: no mark, or "(?)" (Tekla numbering not up to date)
+          name: str(u.name), modelId: u.modelId, modelName: u.modelName || u.modelId,
           instances: [], objects: [], rebars: [], materials: new Set(), positions: new Set(),
           totals: { volume: 0, rebar: 0, psetRebar: null, weight: null },
         });
@@ -70,8 +71,10 @@
       return g;
     });
     // natural sort by mark; units without a mark after the marked ones, by name
-    out.sort((a, b) => (!!b.mark - !!a.mark) || C.naturalCompare(a.mark, b.mark) ||
-      C.naturalCompare(a.name, b.name) || C.naturalCompare(a.positions[0] || "", b.positions[0] || ""));
+    // numbered cast units first (natural sort by mark); then unnumbered ones ("(?)" or no mark) by name
+    out.sort((a, b) => (b.numbered - a.numbered) ||
+      (a.numbered ? C.naturalCompare(a.mark, b.mark) : C.naturalCompare(a.name, b.name) || C.naturalCompare(a.mark, b.mark)) ||
+      C.naturalCompare(a.positions[0] || "", b.positions[0] || ""));
     return out;
   }
 
