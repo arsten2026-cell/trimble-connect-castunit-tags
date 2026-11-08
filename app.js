@@ -166,6 +166,8 @@
   }
 
   // ---------- selectors ----------
+  // cast units in the list after the mark filter
+  function shownUnits() { return state.units.filter((g) => L.matchMark(g.mark || g.label, state.filter)); }
   function selectorFor(objects) {
     const byModel = new Map();
     for (const o of objects) { if (!byModel.has(o.modelId)) byModel.set(o.modelId, []); byModel.get(o.modelId).push(o.id); }
@@ -226,11 +228,19 @@
     if (!state.coloured) return state.api.viewer.setObjectState(selectorFor(all), { color: "reset" });
     for (const g of state.units) if (g.objects.length) await state.api.viewer.setObjectState(selectorFor(g.objects), { color: g.colour });
   }
+  // "Show listed cast units only": only the cast units in the list (after the filter box) stay visible,
+  // concrete and rebar. Connect does not apply an undefined ("all objects") selector reliably together with
+  // per-object states, so both directions use explicit object lists (same as Focus).
   async function applyIsolate() {
+    const all = await everyObject();
+    if (!all.length) return;
     if (state.isolated) {
-      await state.api.viewer.setObjectState(undefined, { visible: false });
-      await state.api.viewer.setObjectState(selectorFor([...allParts(), ...state.units.flatMap((g) => g.rebars)]), { visible: true });
-    } else await state.api.viewer.setObjectState(undefined, { visible: "reset" });
+      const keep = shownUnits().flatMap((g) => [...g.objects, ...g.rebars]);
+      const keys = new Set(keep.map(objKey));
+      const hide = all.filter((o) => !keys.has(objKey(o)));
+      if (keep.length) await state.api.viewer.setObjectState(selectorFor(keep), { visible: true });
+      if (hide.length) await state.api.viewer.setObjectState(selectorFor(hide), { visible: false });
+    } else await state.api.viewer.setObjectState(selectorFor(all), { visible: true });
   }
   async function selectObjects(objs) {
     if (!objs.length) return;
@@ -417,8 +427,12 @@
     });
   });
   // filter box: re-render as you type; Tag shown / Select shown act on the filtered rows
-  const shownUnits = () => state.units.filter((g) => L.matchMark(g.mark || g.label, state.filter));
-  $("txtFilter").addEventListener("input", (e) => { state.filter = e.target.value; render(); });
+  let isoTimer = null;
+  $("txtFilter").addEventListener("input", (e) => {
+    state.filter = e.target.value;
+    render();
+    if (state.isolated) { clearTimeout(isoTimer); isoTimer = setTimeout(() => guarded(applyIsolate), 400); }
+  });
   $("btnTagShown").onclick = () => guarded(async () => {
     const vis = shownUnits();
     const allTagged = vis.every((u) => state.tags.has(u.key));
