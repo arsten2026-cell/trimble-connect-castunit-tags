@@ -26,9 +26,15 @@
   const num = C.num;
   const str = (v) => (v == null ? "" : String(v).trim());
 
+  /** Mark prefix for tagging by group: "FP12" -> "FP", "W0(?)" -> "W", "LC0(?)" -> "LC"; no mark -> "?". */
+  function markPrefix(mark) {
+    const m = str(mark).match(/^[^\d(]+/);
+    return m ? m[0].trim() : "?";
+  }
+
   /**
-   * Group cast units. Identical cast units share a Tekla mark, so units with the same mark in the same model
-   * form one group (e.g. FS4 ×3). Units without a mark (cast unit pset missing) stay one group each, labelled "?".
+   * One row per cast unit instance (identical cast units share a Tekla mark, e.g. four "FP1", but each one is its
+   * own row, as the user asked). Units without a mark (cast unit pset missing) are labelled "?".
    * @param units [{modelId, modelName, id, name, cu: {pset map}|null,
    *               parts: [{modelId, id, props: Part pset, bbox}], rebars: [{modelId, id, props: Rebar pset}]}]
    */
@@ -36,12 +42,12 @@
     const groups = new Map();
     for (const u of units) {
       const mark = str(u.cu && u.cu[CU.mark]);
-      // "W0(?)" = not numbered in Tekla: a placeholder, not a shared mark, so such units stay one row each.
+      // "W0(?)" = not numbered in Tekla: listed in the "Not numbered" section.
       const shared = mark && !C.isUnnumbered(mark);
-      const key = u.modelId + "|" + (shared ? "M:" + mark : "#" + u.id);
+      const key = u.modelId + "|#" + u.id;
       if (!groups.has(key)) {
         groups.set(key, {
-          key, mark, label: mark || "?", numbered: !!shared,   // false: no mark, or "(?)" (Tekla numbering not up to date)
+          key, mark, label: mark || "?", numbered: !!shared, prefix: markPrefix(mark),   // false: no mark, or "(?)" (Tekla numbering not up to date)
           name: str(u.name), modelId: u.modelId, modelName: u.modelName || u.modelId,
           instances: [], objects: [], rebars: [], materials: new Set(), positions: new Set(),
           totals: { volume: 0, rebar: 0, psetRebar: null, weight: null },
@@ -70,12 +76,18 @@
       g.positions = [...g.positions].sort(C.naturalCompare);
       return g;
     });
-    // natural sort by mark; units without a mark after the marked ones, by name
     // numbered cast units first (natural sort by mark); then unnumbered ones ("(?)" or no mark) by name
     out.sort((a, b) => (b.numbered - a.numbered) ||
       (a.numbered ? C.naturalCompare(a.mark, b.mark) : C.naturalCompare(a.name, b.name) || C.naturalCompare(a.mark, b.mark)) ||
-      C.naturalCompare(a.positions[0] || "", b.positions[0] || ""));
+      C.naturalCompare(a.positions[0] || "", b.positions[0] || "") || C.naturalCompare(String(a.key), String(b.key)));
     return out;
+  }
+
+  /** Prefix groups for the "tag by group" bar: [{prefix, count}], naturally sorted. */
+  function prefixGroups(groups) {
+    const m = new Map();
+    for (const g of groups) m.set(g.prefix, (m.get(g.prefix) || 0) + 1);
+    return [...m].map(([prefix, count]) => ({ prefix, count })).sort((a, b) => C.naturalCompare(a.prefix, b.prefix));
   }
 
   /** Rebar table of a cast unit group: Tekla's native rebar objects grouped by Pos + Ø, pcs and kg summed. */
@@ -102,7 +114,6 @@
     { id: "volume", label: "Concrete volume · бетон (m³)", def: true },
     { id: "rebar", label: "Rebar · арм. (kg)", def: true },
     { id: "material", label: "Concrete grade · клас", def: true },
-    { id: "count", label: "Count of identical units", def: true },
   ];
   const fmt = (v, d) => String(Number(v.toFixed(d)));
   const nameHalf = (name, lang) => { const [en, bg] = String(name).split("/"); return ((lang === "bg" ? bg : en) || en || name).trim(); };
@@ -116,7 +127,7 @@
     const parts = [];
     for (const f of FIELDS) {
       if (!on.has(f.id)) continue;
-      if (f.id === "mark") parts.push(g.label + (on.has("count") && g.instances.length > 1 ? ` ×${g.instances.length}` : ""));
+      if (f.id === "mark") parts.push(g.label);
       if (f.id === "name" && g.name) parts.push(nameHalf(g.name, lang));
       if (f.id === "volume") parts.push(bg ? `бетон - ${C.fmtVolume(g.totals.volume)} м³` : `${C.fmtVolume(g.totals.volume)} m³`);
       if (f.id === "rebar" && g.totals.rebar > 0) parts.push(bg ? `арм. ${fmt(g.totals.rebar, 0)}кг` : `rebar ${fmt(g.totals.rebar, 0)} kg`);
@@ -125,5 +136,5 @@
     return parts.join((o.layout || "lines") === "single" ? ", " : "\n");
   }
 
-  return { CU_PSET, CU, PART_PSET, PART, REBAR_PSET, FIELDS, groupCastUnits, rebarTable, labelText };
+  return { CU_PSET, CU, PART_PSET, PART, REBAR_PSET, FIELDS, markPrefix, groupCastUnits, prefixGroups, rebarTable, labelText };
 });

@@ -292,7 +292,7 @@
       reb += `<div class="acts"><button class="small secondary" data-act="selRebar" data-i="${i}">Select rebar</button></div>`;
     }
     return `<tr class="insp"><td colspan="3">
-        <div class="insphead">${esc(g.label)}${g.instances.length > 1 ? ` ×${g.instances.length}` : ""} · ${g.rebars.length} rebar objects</div>
+        <div class="insphead">${esc(g.label)} · ${g.rebars.length} rebar objects</div>
         <div class="pourlists"><div class="lh">Rebar</div>${reb}</div></td></tr>`;
   }
 
@@ -313,7 +313,7 @@
         ? `<tr class="sect"><td colspan="3"><h2>Not numbered (${looseCount})</h2><div class="warn">Marks ending in "(?)" mean Tekla numbering was not up to date at export, so these marks are placeholders: each cast unit is listed on its own. Run numbering in Tekla and export again to get real marks.</div></td></tr>`
         : "";
       return head + `<tr>
-        <td>${state.coloured ? `<span class="sw" style="background:${g.colour}"></span>` : ""}<span class="name">${esc(g.label)}${g.instances.length > 1 ? ` ×${g.instances.length}` : ""}</span><button
+        <td>${state.coloured ? `<span class="sw" style="background:${g.colour}"></span>` : ""}<span class="name">${esc(g.label)}</span><button
             class="small inspect ${state.inspectKey === g.key ? "on" : "secondary"}" data-act="inspect" data-i="${i}" title="Rebar list of this cast unit">Inspect ${state.inspectKey === g.key ? "▴" : "▾"}</button>
           <div class="sub">${esc(name)}${g.positions.length ? " · " + esc(g.positions.slice(0, 4).join(", ")) + (g.positions.length > 4 ? " …" : "") : ""}${g.materials.length ? " · " + esc(g.materials.join(", ")) : ""}</div>
           ${state.multiModel ? `<div class="sub">${esc(C.shortModelName(g.modelName))}</div>` : ""}
@@ -326,6 +326,19 @@
     const t = state.units.reduce((a, g) => ({ v: a.v + g.totals.volume, r: a.r + g.totals.rebar }), { v: 0, r: 0 });
     $("foot").innerHTML = `<tr><td>Total (${state.units.length})</td><td class="num">${f1(t.v)}</td><td class="num">${f0(t.r)}</td></tr>`;
     $("btnClearFocus").hidden = state.focusKey == null;
+    renderPrefixBar();
+  }
+  // "Tag by group": one chip per mark prefix with Tag (toggles all) and Select.
+  function renderPrefixBar() {
+    const groups = L.prefixGroups(state.units);
+    $("prefixBox").hidden = groups.length < 2;
+    $("prefixBar").innerHTML = groups.map(({ prefix, count }) => {
+      const members = state.units.filter((u) => u.prefix === prefix);
+      const on = members.every((u) => state.tags.has(u.key));
+      return `<span class="chip"><b>${esc(prefix)}</b> <span class="sub">${count}</span><button
+        class="small ${on ? "on" : "secondary"}" data-act="pfxTag" data-p="${esc(prefix)}" title="${on ? "Remove the tags of" : "Tag all"} ${esc(prefix)} cast units">Tag</button><button
+        class="small secondary" data-act="pfxSel" data-p="${esc(prefix)}" title="Select all ${esc(prefix)} cast units">Select</button></span>`;
+    }).join("");
   }
 
   function renderFieldOptions() {
@@ -340,6 +353,19 @@
   document.addEventListener("click", (e) => {
     const b = e.target.closest("button[data-act]");
     if (!b) return;
+    // tag / select a whole group by mark prefix (FP, FS, W, ...)
+    if (b.dataset.act === "pfxTag" || b.dataset.act === "pfxSel") {
+      const members = state.units.filter((u) => u.prefix === b.dataset.p);
+      guarded(async () => {
+        if (b.dataset.act === "pfxSel") return selectObjects(members.flatMap((u) => u.objects));
+        const allTagged = members.every((u) => state.tags.has(u.key));
+        if (allTagged) await removeTags(members.map((u) => u.key));
+        else await addTags(members.filter((u) => !state.tags.has(u.key)));
+        setStatus(`${b.dataset.p}: ${allTagged ? "tags removed" : members.length + " cast units tagged"}`);
+        render();
+      });
+      return;
+    }
     const g = state.units[+b.dataset.i];
     if (!g) return;
     guarded(async () => {

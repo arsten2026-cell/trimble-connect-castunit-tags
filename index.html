@@ -48,6 +48,10 @@
   .mism { font-size:11px; color:var(--bad); margin-top:3px; }
   tr.sect > td { background:var(--bg); padding:10px 0 6px; border-bottom:none; }
   tr.sect h2 { margin:4px 0; }
+  .pfx { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { display:inline-flex; align-items:center; gap:4px; background:var(--panel); border:1px solid var(--line); padding:2px 2px 2px 6px; font-size:12px; }
+  .chip button.small { padding:1px 6px; font-size:11px; }
+  .chip button.small + button.small { margin-left:-1px; }
   .warn { background:#fff4e5; border:1px solid #f0c48a; padding:8px; font-size:12px; margin-top:6px; }
   .empty { color:var(--muted); font-size:12px; padding:8px 0; }
 </style>
@@ -80,6 +84,11 @@
 
 <div id="cuWarn" class="warn" hidden></div>
 
+<div id="prefixBox" hidden>
+  <h2>Tag by group</h2>
+  <div id="prefixBar" class="pfx"></div>
+</div>
+
 <h2>Cast units</h2>
 <table>
   <thead><tr><th>Cast unit</th><th class="num">m³</th><th class="num">kg</th></tr></thead>
@@ -90,7 +99,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/trimble-connect-workspace-api@0.3.38/dist/iife/trimbleconnect.workspace.api.js" integrity="sha384-lFiNt/56q6HnUNbuy0WHO3NP6BkQjY4EH8+5eELYVfnhkB42snRTmSa3UOAlX9gg" crossorigin="anonymous"></script>
 <script src="common.js?v=1"></script>
-<script src="castunits.js?v=3"></script>
-<script src="app.js?v=2"></script>
+<script src="castunits.js?v=4"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>
