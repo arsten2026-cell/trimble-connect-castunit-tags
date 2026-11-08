@@ -30,7 +30,11 @@
     const known = new Set(L.FIELDS.map((f) => f.id));
     return {
       fields: (s.fields || L.FIELDS.filter((f) => f.def).map((f) => f.id)).filter((id) => known.has(id)),
-      lift: s.lift || 3, side: s.side != null ? s.side : 3,
+      // defaults 1 m up, 1 m sideways (user's choice 2026-11-09); settings saved before v2 still had the old 3 m
+      // defaults, so those move to the new defaults while the chosen fields and language are kept
+      lift: s.v >= 2 && s.lift ? s.lift : 1,
+      side: s.v >= 2 && s.side != null ? s.side : 1,
+      v: 2,
       lang: s.lang === "en" ? "en" : "bg", layout: s.layout === "single" ? "single" : "lines",
     };
   })();
