@@ -19,6 +19,7 @@
     coloured: false, isolated: false,
     focusKey: null, focusTagAdded: false,
     inspectKey: null,
+    filter: "",              // mark filter text
     selPrefixes: new Set(),   // prefix groups currently selected (Tag by group)
   };
 
@@ -309,9 +310,15 @@
       $("foot").innerHTML = "";
       return;
     }
-    const firstLoose = state.units.findIndex((g) => !g.numbered);
-    const looseCount = state.units.filter((g) => !g.numbered).length;
-    rows.innerHTML = state.units.map((g, i) => {
+    // mark filter (box next to "Cast units"): rows keep their index in state.units for the buttons
+    const shown = (g) => L.matchMark(g.mark || g.label, state.filter);
+    const visible = state.units.filter(shown);
+    const firstLoose = state.units.findIndex((g) => !g.numbered && shown(g));
+    const looseCount = visible.filter((g) => !g.numbered).length;
+    if (!visible.length) {
+      rows.innerHTML = `<tr><td colspan="3" class="empty">No cast unit mark matches "${esc(state.filter)}".</td></tr>`;
+    } else rows.innerHTML = state.units.map((g, i) => {
+      if (!shown(g)) return "";
       const tagged = state.tags.has(g.key);
       const name = g.name.split("/")[0] || "–";
       // Unnumbered cast units (mark "(?)" or none) in their own section, like bare "TAKT" pours in Pour tags.
@@ -329,8 +336,11 @@
         <td class="num">${C.fmtVolume(g.totals.volume)}</td>
         <td class="num">${f0(g.totals.rebar)}</td></tr>` + (state.inspectKey === g.key ? inspectRow(g, i) : "");
     }).join("");
-    const t = state.units.reduce((a, g) => ({ v: a.v + g.totals.volume, r: a.r + g.totals.rebar }), { v: 0, r: 0 });
-    $("foot").innerHTML = `<tr><td>Total (${state.units.length})</td><td class="num">${f1(t.v)}</td><td class="num">${f0(t.r)}</td></tr>`;
+    const t = visible.reduce((a, g) => ({ v: a.v + g.totals.volume, r: a.r + g.totals.rebar }), { v: 0, r: 0 });
+    const filtered = visible.length !== state.units.length;
+    $("foot").innerHTML = `<tr><td>${filtered ? `Shown (${visible.length} of ${state.units.length})` : `Total (${state.units.length})`}</td><td class="num">${f1(t.v)}</td><td class="num">${f0(t.r)}</td></tr>`;
+    $("filterActs").hidden = !filtered || !visible.length;
+    $("filterCount").textContent = filtered ? `${visible.length} shown` : "";
     $("btnClearFocus").hidden = state.focusKey == null;
     renderPrefixBar();
   }
@@ -406,6 +416,18 @@
       else if (act === "selRebar") await selectObjects(g.rebars);
     });
   });
+  // filter box: re-render as you type; Tag shown / Select shown act on the filtered rows
+  const shownUnits = () => state.units.filter((g) => L.matchMark(g.mark || g.label, state.filter));
+  $("txtFilter").addEventListener("input", (e) => { state.filter = e.target.value; render(); });
+  $("btnTagShown").onclick = () => guarded(async () => {
+    const vis = shownUnits();
+    const allTagged = vis.every((u) => state.tags.has(u.key));
+    if (allTagged) await removeTags(vis.map((u) => u.key));
+    else await addTags(vis.filter((u) => !state.tags.has(u.key)));
+    setStatus(`${state.filter}: ${allTagged ? "tags removed" : vis.length + " cast units tagged"}`);
+    render();
+  });
+  $("btnSelectShown").onclick = () => guarded(() => selectObjects(shownUnits().flatMap((u) => u.objects)));
   $("btnShowAll").onclick = () => guarded(showAll);
   $("btnClear").onclick = () => guarded(clearAll);
   $("btnClearFocus").onclick = () => guarded(clearFocus);

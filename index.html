@@ -52,6 +52,11 @@
   .chip { display:inline-flex; align-items:center; gap:4px; background:var(--panel); border:1px solid var(--line); padding:2px 2px 2px 6px; font-size:12px; }
   .chip button.small { padding:1px 6px; font-size:11px; }
   .chip button.small + button.small { margin-left:-1px; }
+  .cuhead { display:flex; align-items:center; gap:8px; margin:14px 0 6px; }
+  .cuhead h2 { margin:0; }
+  #txtFilter { flex:1; min-width:0; font:inherit; font-size:12px; padding:3px 6px; border:1px solid var(--line); border-radius:0; background:#fff; }
+  #filterActs { align-items:center; }
+  #filterActs button.small + button.small { margin-left:-7px; }
   .warn { background:#fff4e5; border:1px solid #f0c48a; padding:8px; font-size:12px; margin-top:6px; }
   .empty { color:var(--muted); font-size:12px; padding:8px 0; }
 </style>
@@ -89,7 +94,12 @@
   <div id="prefixBar" class="pfx"></div>
 </div>
 
-<h2>Cast units</h2>
+<div class="cuhead"><h2>Cast units</h2>
+  <input id="txtFilter" type="search" placeholder="Filter: FP, FS2 …" autocomplete="off" title="Mark filter: FP = all FP; FP2 = only FP2; several separated by space or comma"></div>
+<div id="filterActs" class="bar" hidden>
+  <span id="filterCount" class="sub"></span>
+  <button id="btnTagShown" class="small secondary">Tag shown</button><button id="btnSelectShown" class="small secondary">Select shown</button>
+</div>
 <table>
   <thead><tr><th>Cast unit</th><th class="num">m³</th><th class="num">kg</th></tr></thead>
   <tbody id="rows"><tr><td colspan="3" class="empty">No pours loaded yet.</td></tr></tbody>
@@ -99,7 +109,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/trimble-connect-workspace-api@0.3.38/dist/iife/trimbleconnect.workspace.api.js" integrity="sha384-lFiNt/56q6HnUNbuy0WHO3NP6BkQjY4EH8+5eELYVfnhkB42snRTmSa3UOAlX9gg" crossorigin="anonymous"></script>
 <script src="common.js?v=1"></script>
-<script src="castunits.js?v=4"></script>
-<script src="app.js?v=5"></script>
+<script src="castunits.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

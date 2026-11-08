@@ -83,6 +83,19 @@
     return out;
   }
 
+  /**
+   * Filter by mark. Several terms (space or comma separated) are OR-ed; case-insensitive.
+   *  - a term ending in a letter matches marks that start with it: "FP" -> FP1 … FP15, FP2(?), not FS1
+   *  - a term ending in a digit matches that mark exactly, or its unnumbered form: "FP2" -> FP2, FP2(?); not FP20
+   * An empty query matches everything.
+   */
+  function matchMark(mark, query) {
+    const terms = str(query).toUpperCase().split(/[\s,;]+/).filter(Boolean);
+    if (!terms.length) return true;
+    const m = str(mark).toUpperCase();
+    return terms.some((t) => (/\d$/.test(t) ? m === t || m.startsWith(t + "(") : m.startsWith(t)));
+  }
+
   /** Prefix groups for the "tag by group" bar: [{prefix, count}], naturally sorted. */
   function prefixGroups(groups) {
     const m = new Map();
@@ -136,5 +149,5 @@
     return parts.join((o.layout || "lines") === "single" ? ", " : "\n");
   }
 
-  return { CU_PSET, CU, PART_PSET, PART, REBAR_PSET, FIELDS, markPrefix, groupCastUnits, prefixGroups, rebarTable, labelText };
+  return { CU_PSET, CU, PART_PSET, PART, REBAR_PSET, FIELDS, markPrefix, matchMark, groupCastUnits, prefixGroups, rebarTable, labelText };
 });
