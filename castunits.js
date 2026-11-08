@@ -36,7 +36,9 @@
     const groups = new Map();
     for (const u of units) {
       const mark = str(u.cu && u.cu[CU.mark]);
-      const key = u.modelId + "|" + (mark ? "M:" + mark : "#" + u.id);
+      // "W0(?)" = not numbered in Tekla: a placeholder, not a shared mark, so such units stay one row each.
+      const shared = mark && !C.isUnnumbered(mark);
+      const key = u.modelId + "|" + (shared ? "M:" + mark : "#" + u.id);
       if (!groups.has(key)) {
         groups.set(key, {
           key, mark, label: mark || "?", name: str(u.name), modelId: u.modelId, modelName: u.modelName || u.modelId,
