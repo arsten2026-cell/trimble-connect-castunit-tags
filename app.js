@@ -228,19 +228,21 @@
     if (!state.coloured) return state.api.viewer.setObjectState(selectorFor(all), { color: "reset" });
     for (const g of state.units) if (g.objects.length) await state.api.viewer.setObjectState(selectorFor(g.objects), { color: g.colour });
   }
-  // "Show listed cast units only": only the cast units in the list (after the filter box) stay visible,
-  // concrete and rebar. Connect does not apply an undefined ("all objects") selector reliably together with
-  // per-object states, so both directions use explicit object lists (same as Focus).
+  // "Show listed cast units only": only the cast units in the list (after the filter box) stay visible, concrete
+  // and rebar. Uses viewer.isolateEntities (as the MCP bridge's verified isolate does); hiding "everything else"
+  // with setObjectState hid the cast units too. Unticking resets visibility.
   async function applyIsolate() {
-    const all = await everyObject();
-    if (!all.length) return;
+    const api = state.api;
     if (state.isolated) {
       const keep = shownUnits().flatMap((g) => [...g.objects, ...g.rebars]);
-      const keys = new Set(keep.map(objKey));
-      const hide = all.filter((o) => !keys.has(objKey(o)));
-      if (keep.length) await state.api.viewer.setObjectState(selectorFor(keep), { visible: true });
-      if (hide.length) await state.api.viewer.setObjectState(selectorFor(hide), { visible: false });
-    } else await state.api.viewer.setObjectState(selectorFor(all), { visible: true });
+      const byModel = new Map();
+      for (const o of keep) { if (!byModel.has(o.modelId)) byModel.set(o.modelId, []); byModel.get(o.modelId).push(o.id); }
+      await api.viewer.isolateEntities([...byModel].map(([modelId, entityIds]) => ({ modelId, entityIds })));
+    } else {
+      await api.viewer.setObjectState(undefined, { visible: "reset" });
+      const all = await everyObject();
+      if (all.length) await api.viewer.setObjectState(selectorFor(all), { visible: true });
+    }
   }
   async function selectObjects(objs) {
     if (!objs.length) return;
