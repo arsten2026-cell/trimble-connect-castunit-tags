@@ -19,6 +19,7 @@
     coloured: false, isolated: false,
     focusKey: null, focusTagAdded: false,
     inspectKey: null,
+    selPrefixes: new Set(),   // prefix groups currently selected (Tag by group)
   };
 
   // ---------- settings ----------
@@ -228,6 +229,7 @@
   }
   async function selectObjects(objs) {
     if (!objs.length) return;
+    if (state.selPrefixes.size) { state.selPrefixes.clear(); render(); }
     const sel = selectorFor(objs);
     await state.api.viewer.setSelection(sel, "set");
     await state.api.viewer.setCamera(sel, { animationTime: 600 });
@@ -328,6 +330,26 @@
     $("btnClearFocus").hidden = state.focusKey == null;
     renderPrefixBar();
   }
+  // Select by group adds to the selection, so several groups can be selected together (e.g. FP + FS);
+  // clicking a selected group again removes only that group.
+  async function togglePrefixSelection(prefix, members) {
+    const objs = members.flatMap((u) => u.objects);
+    if (!objs.length) return;
+    const sel = selectorFor(objs);
+    if (state.selPrefixes.has(prefix)) {
+      state.selPrefixes.delete(prefix);
+      await state.api.viewer.setSelection(sel, "remove");
+    } else {
+      // first group: start a fresh selection; further groups: add to it
+      await state.api.viewer.setSelection(sel, state.selPrefixes.size ? "add" : "set");
+      state.selPrefixes.add(prefix);
+      const all = state.units.filter((u) => state.selPrefixes.has(u.prefix)).flatMap((u) => u.objects);
+      await state.api.viewer.setCamera(selectorFor(all), { animationTime: 600 });
+    }
+    const list = [...state.selPrefixes];
+    setStatus(list.length ? `Selected: ${list.join(" + ")} (${state.units.filter((u) => state.selPrefixes.has(u.prefix)).length} cast units)` : "Selection cleared");
+    render();
+  }
   // "Tag by group": one chip per mark prefix with Tag (toggles all) and Select.
   function renderPrefixBar() {
     const groups = L.prefixGroups(state.units);
@@ -337,7 +359,7 @@
       const on = members.every((u) => state.tags.has(u.key));
       return `<span class="chip"><b>${esc(prefix)}</b> <span class="sub">${count}</span><button
         class="small ${on ? "on" : "secondary"}" data-act="pfxTag" data-p="${esc(prefix)}" title="${on ? "Remove the tags of" : "Tag all"} ${esc(prefix)} cast units">Tag</button><button
-        class="small secondary" data-act="pfxSel" data-p="${esc(prefix)}" title="Select all ${esc(prefix)} cast units">Select</button></span>`;
+        class="small ${state.selPrefixes.has(prefix) ? "on" : "secondary"}" data-act="pfxSel" data-p="${esc(prefix)}" title="${state.selPrefixes.has(prefix) ? "Remove" : "Add"} ${esc(prefix)} cast units ${state.selPrefixes.has(prefix) ? "from" : "to"} the selection">Select</button></span>`;
     }).join("");
   }
 
@@ -357,7 +379,7 @@
     if (b.dataset.act === "pfxTag" || b.dataset.act === "pfxSel") {
       const members = state.units.filter((u) => u.prefix === b.dataset.p);
       guarded(async () => {
-        if (b.dataset.act === "pfxSel") return selectObjects(members.flatMap((u) => u.objects));
+        if (b.dataset.act === "pfxSel") return togglePrefixSelection(b.dataset.p, members);
         const allTagged = members.every((u) => state.tags.has(u.key));
         if (allTagged) await removeTags(members.map((u) => u.key));
         else await addTags(members.filter((u) => !state.tags.has(u.key)));
@@ -404,7 +426,14 @@
   renderFieldOptions();
 
   let reloadTimer = null;
-  function onEvent(event) {
+  function onEvent(event, data) {
+    // selection cleared in the viewer (e.g. click on empty space): the group chips are no longer selected
+    if (event === "viewer.onSelectionChanged" && state.selPrefixes.size) {
+      const sel = data && (data.data || data);
+      const n = Array.isArray(sel) ? sel.reduce((k, m) => k + ((m && m.objectRuntimeIds) || []).length, 0) : -1;
+      if (n === 0) { state.selPrefixes.clear(); render(); }
+      return;
+    }
     if (event === "viewer.onModelReset") {
       state.focusKey = null; state.focusTagAdded = false; state.coloured = false; $("chkColour").checked = false;
       render();
