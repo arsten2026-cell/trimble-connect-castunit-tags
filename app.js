@@ -20,6 +20,7 @@
     focusKey: null, focusTagAdded: false,
     inspectKey: null,
     filter: "",              // mark filter text
+    selKeys: null,           // Show selected: cast unit keys of the model selection (null = off)
     selPrefixes: new Set(),   // prefix groups currently selected (Tag by group)
   };
 
@@ -167,7 +168,27 @@
 
   // ---------- selectors ----------
   // cast units in the list after the mark filter
-  function shownUnits() { return state.units.filter((g) => L.matchMark(g.mark || g.label, state.filter)); }
+  function isShown(g) { return state.selKeys ? state.selKeys.has(g.key) : L.matchMark(g.mark || g.label, state.filter); }
+  function shownUnits() { return state.units.filter(isShown); }
+  // "Show selected": list the cast units of what is selected in the model (concrete part, rebar or the assembly).
+  async function showSelected() {
+    const sel = (await state.api.viewer.getSelection()) || [];
+    const index = new Map();   // object key -> cast unit key
+    for (const g of state.units) {
+      for (const o of [...g.objects, ...g.rebars]) index.set(objKey(o), g.key);
+      for (const u of g.instances) index.set(u.modelId + ":" + u.id, g.key);
+    }
+    const keys = new Set();
+    let n = 0;
+    for (const m of sel) for (const id of m.objectRuntimeIds || []) { n++; const k = index.get(m.modelId + ":" + id); if (k) keys.add(k); }
+    if (!n) return setStatus("Nothing is selected in the model. Select cast units first, then click Show selected.", true);
+    if (!keys.size) return setStatus(`None of the ${n} selected objects belongs to a cast unit.`, true);
+    state.selKeys = keys;
+    state.filter = ""; $("txtFilter").value = "";
+    setStatus(`Showing the ${keys.size} cast unit${keys.size > 1 ? "s" : ""} of the selection (${n} objects).`);
+    render();
+    if (state.isolated) await applyIsolate();
+  }
   function selectorFor(objects) {
     const byModel = new Map();
     for (const o of objects) { if (!byModel.has(o.modelId)) byModel.set(o.modelId, []); byModel.get(o.modelId).push(o.id); }
@@ -323,12 +344,13 @@
       return;
     }
     // mark filter (box next to "Cast units"): rows keep their index in state.units for the buttons
-    const shown = (g) => L.matchMark(g.mark || g.label, state.filter);
+    const shown = isShown;
     const visible = state.units.filter(shown);
     const firstLoose = state.units.findIndex((g) => !g.numbered && shown(g));
     const looseCount = visible.filter((g) => !g.numbered).length;
     if (!visible.length) {
       rows.innerHTML = `<tr><td colspan="3" class="empty">No cast unit mark matches "${esc(state.filter)}".</td></tr>`;
+      $("filterActs").hidden = true;
     } else rows.innerHTML = state.units.map((g, i) => {
       if (!shown(g)) return "";
       const tagged = state.tags.has(g.key);
@@ -352,7 +374,9 @@
     const filtered = visible.length !== state.units.length;
     $("foot").innerHTML = `<tr><td>${filtered ? `Shown (${visible.length} of ${state.units.length})` : `Total (${state.units.length})`}</td><td class="num">${f1(t.v)}</td><td class="num">${f0(t.r)}</td></tr>`;
     $("filterActs").hidden = !filtered || !visible.length;
-    $("filterCount").textContent = filtered ? `${visible.length} shown` : "";
+    $("filterCount").textContent = filtered ? `${visible.length} ${state.selKeys ? "selected" : "shown"}` : "";
+    $("btnShowAllRows").hidden = !state.selKeys;
+    $("btnShowSel").className = "small " + (state.selKeys ? "on" : "secondary");
     $("btnClearFocus").hidden = state.focusKey == null;
     renderPrefixBar();
   }
@@ -432,15 +456,18 @@
   let isoTimer = null;
   $("txtFilter").addEventListener("input", (e) => {
     state.filter = e.target.value;
+    state.selKeys = null;     // typing replaces the selection filter
     render();
     if (state.isolated) { clearTimeout(isoTimer); isoTimer = setTimeout(() => guarded(applyIsolate), 400); }
   });
+  $("btnShowSel").onclick = () => guarded(showSelected);
+  $("btnShowAllRows").onclick = () => guarded(async () => { state.selKeys = null; render(); if (state.isolated) await applyIsolate(); });
   $("btnTagShown").onclick = () => guarded(async () => {
     const vis = shownUnits();
     const allTagged = vis.every((u) => state.tags.has(u.key));
     if (allTagged) await removeTags(vis.map((u) => u.key));
     else await addTags(vis.filter((u) => !state.tags.has(u.key)));
-    setStatus(`${state.filter}: ${allTagged ? "tags removed" : vis.length + " cast units tagged"}`);
+    setStatus(`${state.selKeys ? "Selection" : state.filter}: ${allTagged ? "tags removed" : vis.length + " cast units tagged"}`);
     render();
   });
   $("btnSelectShown").onclick = () => guarded(() => selectObjects(shownUnits().flatMap((u) => u.objects)));
