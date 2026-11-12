@@ -496,6 +496,8 @@
 
   let reloadTimer = null;
   function onEvent(event, data) {
+    if (tokenHelper) tokenHelper.onEvent(event, data);
+    if (denied) return;
     // selection cleared in the viewer (e.g. click on empty space): the group chips are no longer selected
     if (event === "viewer.onSelectionChanged" && state.selPrefixes.size) {
       const sel = data && (data.data || data);
@@ -519,7 +521,25 @@
     }
   }
 
-  async function start(api) { state.api = api; await guarded(loadCastUnits); }
+
+  // ---------- access (shared/arsten-access.js): ADMIN or GENERAL CONTRACTOR group only ----------
+  let tokenHelper = null, denied = false;
+  async function gate(api) {
+    if (window.ARSTEN_DEMO) return true;
+    tokenHelper = ArstenAccess.tokenGetter(api);
+    setStatus("Checking access… / Проверка на достъпа…");
+    const access = await ArstenAccess.check({ api, getToken: tokenHelper.getToken, app: "execution" });
+    if (access.allowed) return true;
+    denied = true;
+    ArstenAccess.renderDenied(document.body, "bg", access);
+    return false;
+  }
+
+  async function start(api) {
+    if (!(await gate(api))) return;   // no data is read before access is confirmed
+    state.api = api;
+    await guarded(loadCastUnits);
+  }
   window.CastUnitTagsApp = { start, state };   // used by demo.js
 
   if (window.parent === window) {
