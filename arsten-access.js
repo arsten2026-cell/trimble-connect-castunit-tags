@@ -1,12 +1,12 @@
 // Arsten access control for Trimble Connect extensions (role-based, fail closed).
 //
 // Roles, from the Connect project (ALL configuration is in GROUP_ROLES and APPS below):
-//   admin  - project role ADMIN                          -> everything
+//   admin  - project role ADMIN, or group "00_ADMIN"     -> everything
 //   gc     - group "GENERAL CONTRACTOR" (1028: "02.GENERAL CONTRACTOR") -> execution extensions
 //   client - group "CLIENT" ("01.CLIENT")                -> "Project status" (client viewer)
 //   subcontractor / designer / viewer - groups "03.SUBCONTRACTORS" / "04.DESIGNERS" / "05.VIEWERS" -> nothing yet
 //   none   - anyone else, or the role cannot be determined -> no access
-// Group names are matched without a leading number prefix ("02." / "2 " / "02-"), case- and space-insensitively.
+// Group names are matched without a leading number prefix ("02." / "00_" / "2 " / "02-"), case- and space-insensitively.
 // To give a group access later: add its role to the app's list in APPS (or map the group to an existing role).
 //
 // Usage (browser, after TrimbleConnectWorkspace.connect):
@@ -29,6 +29,7 @@
 
   /** Connect group name (without its number prefix) -> role. */
   const GROUP_ROLES = {
+    "ADMIN": "admin",              // group "00_ADMIN": same rights as a Connect project admin
     "GENERAL CONTRACTOR": "gc",
     "CLIENT": "client",
     "SUBCONTRACTORS": "subcontractor",
@@ -36,7 +37,7 @@
     "VIEWERS": "viewer",
   };
   /** Which roles may use which kind of extension. Roles not listed anywhere have no access. */
-  const APPS = { execution: ["admin", "gc"], admin: ["admin"], projectStatus: ["admin", "client"] };
+  const APPS = { execution: ["admin", "gc"], admin: ["admin"], projectStatus: ["admin", "client", "gc"] };   // projectStatus: GC too (user, 12.11)
   /** When someone is in several groups, the first role in this order wins. */
   const ROLE_ORDER = ["admin", "gc", "client", "subcontractor", "designer", "viewer"];
   const DEFAULTS = { groupRoles: GROUP_ROLES, apps: APPS, cacheMinutes: 10 };
@@ -46,7 +47,7 @@
   const sameUser = (a, b) => !!a && !!b && ((a.id && b.id && a.id === b.id) || (a.email && b.email && norm(a.email) === norm(b.email))
     || (a.tiduuid && b.tiduuid && a.tiduuid === b.tiduuid));
 
-  /** Group name as matched: number prefix ("02.", "2 ", "02-") and extra spaces removed, lower case. */
+  /** Group name as matched: number prefix ("02.", "00_", "2 ", "02-") and extra spaces removed, lower case. */
   const groupKey = (name) => norm(name).replace(/^\d+\s*[.)\-_:]?\s*/, "").trim();
   /** Effective config: defaults + overrides. Old style config.groups {gc: "NAME"} is still accepted. */
   function conf(config) {
@@ -88,56 +89,52 @@
   /** Is a role allowed to use an app kind ("execution" | "admin" | "projectStatus")? Unknown app: no. */
   const allows = (app, role, config) => (conf(config).apps[app] || []).includes(role);
 
-  // ---------- server-side write protection (Property Set Library policy) ----------
-  const WRITE_ID = "ArstenWriters";
+  // ---------- server-side access of a Property Set Library (read only; set it in Connect's "Library access control") ----------
+  // Connect writes the policy itself (tested 12.11.2026 on a throwaway library in 1028):
+  //   we:libdef:v1   principal {any:["project:P"], notAny:["group:G"]}  -> default access for members (not in G)
+  //   we:groupdef:v1 principal {all:["project:P", "group:G"]}            -> access of group G
+  //   we:projadm:v1  principal "project:P:ADMIN"                         -> library management, NO pset:PutPSet
+  // Write = "pset:PutPSet"; read = "pset:Get*". Project admins can write values only through a group with Edit access.
   /**
-   * Library policy where everyone in the project can read, and only the given Trimble ID subs can write psets.
-   * Keeps the other statements of the current policy (e.g. Connect's own app access), replaces any statement that
-   * lets everyone write (pset:PutPSet with principal "*"), and adds one statement for the writers.
-   * @param current the library's current policy ({version, statements}) or null; writers: [tiduuid]
+   * Who can read / write values under a library policy.
+   * @returns {defaultAccess: "edit"|"read"|"none", groups: [{id, access}], adminsWrite: bool, everyoneWrites: bool}
    */
-  function writersPolicy(current, writers) {
-    const subs = [...new Set((writers || []).filter(Boolean))].sort();
-    const statements = [];
-    for (const st of (current && current.statements) || []) {
-      if (st && typeof st.id === "string" && st.id.startsWith(WRITE_ID)) continue;
-      const actions = [].concat(st && st.action || []);
-      const writes = actions.some((a) => /^pset:(PutPSet|\*)$/i.test(a) || a === "*");
-      if (st && st.effect === "Allow" && st.principal === "*" && writes) {
-        const rest = actions.filter((a) => !/^pset:(PutPSet|\*)$/i.test(a) && a !== "*");
-        if (rest.length) statements.push(Object.assign({}, st, { action: rest }));   // keep the read part
-        continue;
-      }
-      statements.push(st);
-    }
-    if (!statements.some((st) => st && st.effect === "Allow" && st.principal === "*" && [].concat(st.action || []).some((a) => /^pset:GetPSet/i.test(a)))) {
-      statements.push({ id: "ArstenReaders", effect: "Allow", principal: "*", action: ["pset:GetPSet*", "pset:ListPSets", "pset:Subscribe"], resource: ["*"] });
-    }
-    // one statement per writer, principal "sub:<Trimble ID>" exactly as Connect's own policies use it
-    subs.forEach((s, i) => statements.push({ id: `${WRITE_ID}-${i + 1}`, effect: "Allow", principal: "sub:" + s, action: ["pset:PutPSet", "pset:GetPSet*"], resource: ["*"] }));
-    return { version: (current && current.version) || "2020-04-06", statements };
-  }
-  /** Who can write psets under a policy: "everyone", ["sub", ...] or "nobody" (best effort, for display). */
-  function policyWriters(policy) {
-    const subs = [];
+  function describePolicy(policy) {
+    const acts = (st) => [].concat((st && st.action) || []);
+    const writes = (st) => acts(st).some((a) => a === "*" || /^pset:(PutPSet|\*)$/i.test(a));
+    const reads = (st) => acts(st).some((a) => a === "*" || /^pset:(Get(PSet)?\*|GetPSet|\*)$/i.test(a));
+    const list = (v) => [].concat(v || []);
+    const groupOf = (p) => { const g = list(p).find((x) => /^group:/.test(x)); return g ? g.slice(6) : null; };
+    const out = { defaultAccess: "none", groups: [], adminsWrite: false, everyoneWrites: false };
+    const level = (st) => (writes(st) ? "edit" : reads(st) ? "read" : "none");
+    const better = (a, b) => (["none", "read", "edit"].indexOf(a) >= ["none", "read", "edit"].indexOf(b) ? a : b);
     for (const st of (policy && policy.statements) || []) {
       if (!st || st.effect !== "Allow") continue;
-      const actions = [].concat(st.action || []);
-      if (!actions.some((a) => /^pset:(PutPSet|\*)$/i.test(a) || a === "*")) continue;
-      const ps = [].concat(st.principal || []);
-      if (ps.includes("*")) return "everyone";
-      for (const p of ps) if (/^sub:/.test(p)) subs.push(p.slice(4));
+      const p = st.principal;
+      if (typeof p === "string") {
+        if (p === "*" || /^project:[^:]+$/.test(p)) { out.defaultAccess = better(level(st), out.defaultAccess); if (writes(st)) out.everyoneWrites = true; }
+        else if (/^project:[^:]+:ADMIN$/i.test(p)) { if (writes(st)) out.adminsWrite = true; }
+        else if (/^group:/.test(p)) out.groups.push({ id: p.slice(6), access: level(st) });
+        continue;
+      }
+      if (p && p.all && groupOf(p.all)) { out.groups.push({ id: groupOf(p.all), access: level(st) }); continue; }
+      if (p && p.any) {   // default access for members (possibly except some groups)
+        out.defaultAccess = better(level(st), out.defaultAccess);
+        if (writes(st) && !list(p.notAny).length) out.everyoneWrites = true;
+      }
     }
-    return subs.length ? subs : "nobody";
+    return out;
   }
 
   // ---------- network ----------
   async function coreGet(base, path, getToken, fetchImpl) {
     const f = fetchImpl || fetch;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // 401: refresh the token and retry. Right after an extension is installed/allowed the first token can be refused
+    // for a moment, so the last tries wait a little (seen live 12.11.2026).
+    for (let attempt = 0; attempt < 4; attempt++) {
       const token = await getToken(attempt > 0);
       const res = await f(base + path, { headers: { Authorization: "Bearer " + token, Range: "items=0-999" } });
-      if (res.status === 401 && attempt === 0) continue;
+      if (res.status === 401 && attempt < 3) { if (attempt > 0 && !fetchImpl) await new Promise((r) => setTimeout(r, 1500 * attempt)); continue; }
       if (!res.ok) throw new Error(`Core API ${path.split("?")[0]}: ${res.status}`);
       return res.json();
     }
@@ -187,18 +184,6 @@
     }
   }
 
-  /** Writers for the Pour status library policy: Trimble ID subs of project admins and GC group members. */
-  async function writerSubs({ projectId, location, getToken, config, fetchImpl }) {
-    const data = await loadProjectAccess({ projectId, location, getToken, config, fetchImpl });
-    const cfg = conf(config);
-    const writeRoles = cfg.apps.execution.filter((r) => r !== "admin");   // whoever may use the execution extensions
-    const admins = data.projectUsers.filter((u) => norm(u.role) === "admin" && String(u.status || "ACTIVE").toUpperCase() !== "REMOVED");
-    const gcGroups = data.groups.filter((g) => writeRoles.includes(cfg.groupRoles[groupKey(g.name)]));
-    const gc = gcGroups.flatMap((g) => g.members || []);
-    const subs = [...admins, ...gc].map((u) => u.tiduuid).filter(Boolean);
-    return { subs: [...new Set(subs)], admins: admins.length, gcMembers: new Set(gc.map((u) => u.id || u.email)).size, gcGroupFound: gcGroups.length > 0 };
-  }
-
   /** Every project member with the role they resolve to (for the admin view; names only). */
   function classifyMembers(data, config) {
     return (data.projectUsers || []).filter((u) => String(u.status || "ACTIVE").toUpperCase() !== "REMOVED").map((u) => {
@@ -242,5 +227,5 @@
     return { getToken, onEvent };
   }
 
-  return { DEFAULTS, APPS, GROUP_ROLES, ROLE_ORDER, groupKey, coreBase, resolveRole, allows, classifyMembers, check, loadProjectAccess, writerSubs, writersPolicy, policyWriters, renderDenied, tokenGetter, _memo: memo };
+  return { DEFAULTS, APPS, GROUP_ROLES, ROLE_ORDER, groupKey, coreBase, resolveRole, allows, classifyMembers, check, loadProjectAccess, describePolicy, renderDenied, tokenGetter, _memo: memo };
 });
