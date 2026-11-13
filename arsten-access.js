@@ -35,27 +35,34 @@
     "SUBCONTRACTORS": "subcontractor",
     "DESIGNERS": "designer",
     "VIEWERS": "viewer",
+    "STRUCTURAL DESIGNER": "designer",   // 1028: "4.1-STRUCTURAL DESIGNER" (also gives the "approve" capability below)
+  };
+  /** Extra rights from a group, independent of the role (an admin in the group gets them too, other admins do not). */
+  const GROUP_CAPS = {
+    "STRUCTURAL DESIGNER": ["approve"],   // the one person who approves formwork / rebar acceptance (user, 13.11.2026)
   };
   /** Which roles may use which kind of extension. Roles not listed anywhere have no access. */
-  const APPS = { execution: ["admin", "gc"], admin: ["admin"], projectStatus: ["admin", "client", "gc"] };   // projectStatus: GC too (user, 12.11)
+  const APPS = { execution: ["admin", "gc"], admin: ["admin"], projectStatus: ["admin", "client", "gc"], assembly: ["admin", "gc", "designer"], acceptance: ["admin", "gc", "designer"] };   // projectStatus: GC too (user, 12.11)
   /** When someone is in several groups, the first role in this order wins. */
   const ROLE_ORDER = ["admin", "gc", "client", "subcontractor", "designer", "viewer"];
-  const DEFAULTS = { groupRoles: GROUP_ROLES, apps: APPS, cacheMinutes: 10 };
+  const DEFAULTS = { groupRoles: GROUP_ROLES, groupCaps: GROUP_CAPS, apps: APPS, cacheMinutes: 10 };
   const CORE = { northamerica: "app", europe: "app21", unitedkingdom: "app22", asia: "app31", australia: "app32" };
 
   const norm = (s) => String(s == null ? "" : s).normalize("NFC").replace(/\s+/g, " ").trim().toLowerCase();
   const sameUser = (a, b) => !!a && !!b && ((a.id && b.id && a.id === b.id) || (a.email && b.email && norm(a.email) === norm(b.email))
     || (a.tiduuid && b.tiduuid && a.tiduuid === b.tiduuid));
 
-  /** Group name as matched: number prefix ("02.", "00_", "2 ", "02-") and extra spaces removed, lower case. */
-  const groupKey = (name) => norm(name).replace(/^\d+\s*[.)\-_:]?\s*/, "").trim();
+  /** Group name as matched: number prefix ("02.", "00_", "2 ", "02-", "4.1-") and extra spaces removed, lower case. */
+  const groupKey = (name) => norm(name).replace(/^\d+(?:[.,]\d+)*\s*[.)\-_:]?\s*/, "").trim();
   /** Effective config: defaults + overrides. Old style config.groups {gc: "NAME"} is still accepted. */
   function conf(config) {
     const c = config || {};
     const groupRoles = {};
     for (const [n, r] of Object.entries(Object.assign({}, GROUP_ROLES, c.groupRoles || {}))) groupRoles[groupKey(n)] = r;
     for (const [r, n] of Object.entries(c.groups || {})) groupRoles[groupKey(n)] = r;
-    return { groupRoles, apps: Object.assign({}, APPS, c.apps || {}), cacheMinutes: c.cacheMinutes || DEFAULTS.cacheMinutes };
+    const groupCaps = {};
+    for (const [n, caps] of Object.entries(Object.assign({}, GROUP_CAPS, c.groupCaps || {}))) groupCaps[groupKey(n)] = caps;
+    return { groupRoles, groupCaps, apps: Object.assign({}, APPS, c.apps || {}), cacheMinutes: c.cacheMinutes || DEFAULTS.cacheMinutes };
   }
   const roleRank = (r) => { const i = ROLE_ORDER.indexOf(r); return i < 0 ? ROLE_ORDER.length : i; };
 
@@ -75,15 +82,19 @@
     const user = data && data.user;
     if (!user || (!user.id && !user.email)) return { role: "none", reason: "no-user" };
     const me = ((data && data.projectUsers) || []).find((u) => sameUser(u, user) && String(u.status || "ACTIVE").toUpperCase() !== "REMOVED");
-    if (!me) return { role: "none", reason: "not-member" };
-    if (norm(me.role) === "admin") return { role: "admin", reason: "project-admin" };
+    if (!me) return { role: "none", reason: "not-member", caps: [] };
+    const caps = new Set();
     let best = null;
     for (const gr of (data && data.groups) || []) {
-      const r = cfg.groupRoles[groupKey(gr.name)];
-      if (!r || !(gr.members || []).some((m) => sameUser(m, user))) continue;
-      if (!best || roleRank(r) < roleRank(best.role)) best = { role: r, reason: "group", group: gr.name };
+      const k = groupKey(gr.name);
+      if (!(gr.members || []).some((m) => sameUser(m, user))) continue;
+      for (const c of cfg.groupCaps[k] || []) caps.add(c);
+      const r = cfg.groupRoles[k];
+      if (r && (!best || roleRank(r) < roleRank(best.role))) best = { role: r, reason: "group", group: gr.name };
     }
-    return best || { role: "none", reason: "no-group" };
+    const capList = [...caps].sort();
+    if (norm(me.role) === "admin") return { role: "admin", reason: "project-admin", caps: capList };
+    return Object.assign(best || { role: "none", reason: "no-group" }, { caps: capList });
   }
 
   /** Is a role allowed to use an app kind ("execution" | "admin" | "projectStatus")? Unknown app: no. */
@@ -167,14 +178,14 @@
       project = await api.project.getProject();
       user = await api.user.getUser();
       if (!project || !project.id || !user) throw new Error("no project or user from Trimble Connect");
-      const key = `arsten.access.${project.id}.${user.id || user.email}`;
+      const key = `arsten.access.v2.${project.id}.${user.id || user.email}`;   // v2: with caps; older panel copies use v1 keys
       const st = storage === undefined ? (typeof sessionStorage !== "undefined" ? sessionStorage : null) : storage;
       let res = memo.get(key);
       if (!res && st) { try { const c = JSON.parse(st.getItem(key) || "null"); if (c && Date.now() - c.at < cfg.cacheMinutes * 60000) res = c.res; } catch {} }
       if (!res) {
         const data = await loadProjectAccess({ projectId: project.id, location: project.location, getToken, config: cfg, fetchImpl });
         const r = resolveRole({ user, projectUsers: data.projectUsers, groups: data.groups }, config);
-        res = { role: r.role, reason: r.reason, group: r.group || null, groupsFound: data.groupsFound };
+        res = { role: r.role, reason: r.reason, group: r.group || null, caps: r.caps || [], groupsFound: data.groupsFound };
         memo.set(key, res);
         if (st) { try { st.setItem(key, JSON.stringify({ at: Date.now(), res })); } catch {} }
       }
@@ -227,5 +238,8 @@
     return { getToken, onEvent };
   }
 
-  return { DEFAULTS, APPS, GROUP_ROLES, ROLE_ORDER, groupKey, coreBase, resolveRole, allows, classifyMembers, check, loadProjectAccess, describePolicy, renderDenied, tokenGetter, _memo: memo };
+  /** Does an access result carry a capability ("approve")? */
+  const can = (access, cap) => !!(access && (access.caps || []).includes(cap));
+
+  return { DEFAULTS, APPS, GROUP_ROLES, GROUP_CAPS, ROLE_ORDER, can, groupKey, coreBase, resolveRole, allows, classifyMembers, check, loadProjectAccess, describePolicy, renderDenied, tokenGetter, _memo: memo };
 });
