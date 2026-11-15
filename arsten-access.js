@@ -36,15 +36,21 @@
     "DESIGNERS": "designer",
     "VIEWERS": "viewer",
     "STRUCTURAL DESIGNER": "designer",   // 1028: "4.1-STRUCTURAL DESIGNER" (also gives the "approve" capability below)
+    "EXECUTION PROJECT MANAGER": "gc",    // "02.1-EXECUTION PROJECT MANAGER": general contractor side (+ "stages" below)
+    "FABRICATOR": "fabricator",           // "06.FABRICATOR": separate company, fabrication panel only
   };
   /** Extra rights from a group, independent of the role (an admin in the group gets them too, other admins do not). */
   const GROUP_CAPS = {
     "STRUCTURAL DESIGNER": ["approve"],   // the one person who approves formwork / rebar acceptance (user, 13.11.2026)
+    "EXECUTION PROJECT MANAGER": ["stages"],   // manages the project's stages (Етапи) with 00_ADMIN (user, 15.11.2026)
+    // 00_ADMIN also manages stages. Only through the group, like the library lock (Stages: Edit for 00_ADMIN + 02.1):
+    // a Connect project admin outside 00_ADMIN is refused by pset-api, so the shell must not offer editing either.
+    "ADMIN": ["stages"],
   };
   /** Which roles may use which kind of extension. Roles not listed anywhere have no access. */
   const APPS = { execution: ["admin", "gc"], admin: ["admin"], projectStatus: ["admin", "client", "gc"], assembly: ["admin", "gc", "designer"], acceptance: ["admin", "gc", "designer"] };   // projectStatus: GC too (user, 12.11)
   /** When someone is in several groups, the first role in this order wins. */
-  const ROLE_ORDER = ["admin", "gc", "client", "subcontractor", "designer", "viewer"];
+  const ROLE_ORDER = ["admin", "gc", "client", "subcontractor", "designer", "fabricator", "viewer"];
   const DEFAULTS = { groupRoles: GROUP_ROLES, groupCaps: GROUP_CAPS, apps: APPS, cacheMinutes: 10 };
   const CORE = { northamerica: "app", europe: "app21", unitedkingdom: "app22", asia: "app31", australia: "app32" };
 
@@ -178,10 +184,17 @@
       project = await api.project.getProject();
       user = await api.user.getUser();
       if (!project || !project.id || !user) throw new Error("no project or user from Trimble Connect");
-      const key = `arsten.access.v2.${project.id}.${user.id || user.email}`;   // v2: with caps; older panel copies use v1 keys
+      // v3 (15.11.2026): 02.1-EXECUTION PROJECT MANAGER + "stages" cap. The key changes whenever the group mapping does,
+      // so an older copy of this file in another panel (same origin, same sessionStorage) can never poison the cache.
+      const key = `arsten.access.v3.${project.id}.${user.id || user.email}`;
       const st = storage === undefined ? (typeof sessionStorage !== "undefined" ? sessionStorage : null) : storage;
       let res = memo.get(key);
-      if (!res && st) { try { const c = JSON.parse(st.getItem(key) || "null"); if (c && Date.now() - c.at < cfg.cacheMinutes * 60000) res = c.res; } catch {} }
+      if (!res && st) {
+        try {
+          const c = JSON.parse(st.getItem(key) || "null");
+          if (c && c.res && Array.isArray(c.res.caps) && Date.now() - c.at < cfg.cacheMinutes * 60000) res = c.res;
+        } catch {}
+      }
       if (!res) {
         const data = await loadProjectAccess({ projectId: project.id, location: project.location, getToken, config: cfg, fetchImpl });
         const r = resolveRole({ user, projectUsers: data.projectUsers, groups: data.groups }, config);
