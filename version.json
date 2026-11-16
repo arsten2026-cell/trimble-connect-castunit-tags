@@ -1,0 +1,15 @@
+{
+  "panel": "castunit-tags",
+  "repo": "arsten2026-cell/trimble-connect-castunit-tags",
+  "id": "a0f0156cb1",
+  "built": "2026-11-16T21:53:08.056Z",
+  "files": {
+    "app.js": "9b461a32b2",
+    "common.js": "d8186cabf4",
+    "castunits.js": "bd40e03f98",
+    "arsten-access.js": "c29c3b3f4f",
+    "manifest.json": "170f4bb963",
+    "icon.svg": "4402c7fe09",
+    "index.html": "28b98d8c9a"
+  }
+}

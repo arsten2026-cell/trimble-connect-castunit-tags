@@ -192,17 +192,20 @@
       if (!res && st) {
         try {
           const c = JSON.parse(st.getItem(key) || "null");
-          if (c && c.res && Array.isArray(c.res.caps) && Date.now() - c.at < cfg.cacheMinutes * 60000) res = c.res;
+          // only a granted role is cached: someone just added to a group must not wait 10 minutes (week 1, A21)
+          if (c && c.res && Array.isArray(c.res.caps) && c.res.role !== "none" && Date.now() - c.at < cfg.cacheMinutes * 60000) res = c.res;
         } catch {}
       }
       if (!res) {
         const data = await loadProjectAccess({ projectId: project.id, location: project.location, getToken, config: cfg, fetchImpl });
         const r = resolveRole({ user, projectUsers: data.projectUsers, groups: data.groups }, config);
         res = { role: r.role, reason: r.reason, group: r.group || null, caps: r.caps || [], groupsFound: data.groupsFound };
-        memo.set(key, res);
-        if (st) { try { st.setItem(key, JSON.stringify({ at: Date.now(), res })); } catch {} }
+        if (res.role !== "none") {
+          memo.set(key, res);
+          if (st) { try { st.setItem(key, JSON.stringify({ at: Date.now(), res })); } catch {} }
+        }
       }
-      return Object.assign({ allowed: allows(app, res.role, config), user, project }, res);
+      return Object.assign({ allowed: allows(app, res.role, config), user, project, app, needs: (cfg.apps[app] || []).slice() }, res);
     } catch (e) {
       return { allowed: false, role: "unknown", reason: "error", error: (e && e.message) || String(e), user, project };
     }
@@ -217,21 +220,49 @@
   }
 
   // ---------- UI ----------
+  const ROLE_NAMES = {
+    bg: { admin: "администратор", gc: "главен изпълнител", client: "клиент", subcontractor: "подизпълнител", designer: "проектант",
+      fabricator: "производител", viewer: "наблюдател", none: "без роля" },
+    en: { admin: "admin", gc: "general contractor", client: "client", subcontractor: "subcontractor", designer: "designer",
+      fabricator: "fabricator", viewer: "viewer", none: "no role" },
+  };
   const TEXT = {
     bg: { title: "Нямате достъп", ask: "Обърнете се към администратора на проекта.", error: "Правата не можаха да бъдат проверени",
-      roles: { client: "Вашата роля: клиент", none: "Не сте в група „GENERAL CONTRACTOR“", "not-member": "Не сте член на проекта" } },
+      notMember: "Не сте член на проекта.", yourRole: "Вашата роля", noGroup: "не сте в нито една група на проекта, която дава роля",
+      viaGroup: "от група", needs: "Този инструмент е за", retry: "Провери отново",
+      wait: "Ако току-що сте добавени в група, Connect може да има нужда от няколко минути." },
     en: { title: "No access", ask: "Ask the project admin.", error: "Your access could not be checked",
-      roles: { client: "Your role: client", none: "You are not in the group \"GENERAL CONTRACTOR\"", "not-member": "You are not a project member" } },
+      notMember: "You are not a project member.", yourRole: "Your role", noGroup: "you are in no project group that gives a role",
+      viaGroup: "from group", needs: "This tool is for", retry: "Check again",
+      wait: "If you were just added to a group, Connect may need a few minutes." },
   };
-  /** Replace the panel with a short no-access message (no project data). */
+  /** Why access was refused, in plain words: the user's role (and its group) and which roles open this tool (week 1, A20). */
+  function deniedReason(lang, access) {
+    const L = lang === "en" ? "en" : "bg", t = TEXT[L], names = ROLE_NAMES[L];
+    const a = access || {};
+    if (a.role === "unknown") return [`${t.error}${a.error ? ": " + a.error : ""}.`];
+    if (a.reason === "not-member") return [t.notMember];
+    const lines = [];
+    lines.push(a.role && a.role !== "none" ? `${t.yourRole}: ${names[a.role] || a.role}${a.group ? ` (${t.viaGroup} „${a.group}“)` : ""}.`
+      : `${t.yourRole}: ${names.none} – ${t.noGroup}.`);
+    if (a.needs && a.needs.length) lines.push(`${t.needs}: ${a.needs.map((r) => names[r] || r).join(", ")}.`);
+    if (a.role === "none") lines.push(t.wait);
+    return lines;
+  }
+  /** Replace the panel with a short no-access message (no project data) and a "check again" button. */
   function renderDenied(container, lang, access) {
     const t = TEXT[lang === "en" ? "en" : "bg"];
-    const why = access && access.role === "unknown" ? `${t.error}${access.error ? ": " + access.error : ""}.`
-      : access && access.reason === "not-member" ? t.roles["not-member"] : access && access.role === "client" ? t.roles.client : t.roles.none;
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     container.innerHTML = `<div style="padding:16px;font:13px/1.45 Ubuntu,'Segoe UI',system-ui,sans-serif;color:#1f1f1f">
       <div style="font-size:15px;font-weight:600;margin-bottom:6px">${esc(t.title)} / ${esc(TEXT[lang === "en" ? "bg" : "en"].title)}</div>
-      <div>${esc(t.ask)}</div><div style="margin-top:8px;font-size:12px;color:#6b6b6b">${esc(why)}</div></div>`;
+      <div>${esc(t.ask)}</div>${deniedReason(lang, access).map((l) => `<div style="margin-top:6px;font-size:12px;color:#6b6b6b">${esc(l)}</div>`).join("")}
+      <button type="button" data-arsten-retry style="margin-top:12px;font:inherit;font-size:12px;padding:4px 10px;border:1px solid #1f1f1f;background:#1f1f1f;color:#fff;cursor:pointer;border-radius:0">${esc(t.retry)}</button></div>`;
+    const b = typeof container.querySelector === "function" ? container.querySelector("[data-arsten-retry]") : null;
+    if (b) b.onclick = () => {
+      memo.clear();
+      try { for (let i = sessionStorage.length - 1; i >= 0; i--) { const k = sessionStorage.key(i); if (k && k.startsWith("arsten.access.")) sessionStorage.removeItem(k); } } catch {}
+      try { location.reload(); } catch {}
+    };
   }
 
   /** Token for extensions that have none: getToken(refresh) + onEvent to feed "extension.accessToken" events. */
@@ -254,5 +285,5 @@
   /** Does an access result carry a capability ("approve")? */
   const can = (access, cap) => !!(access && (access.caps || []).includes(cap));
 
-  return { DEFAULTS, APPS, GROUP_ROLES, GROUP_CAPS, ROLE_ORDER, can, groupKey, coreBase, resolveRole, allows, classifyMembers, check, loadProjectAccess, describePolicy, renderDenied, tokenGetter, _memo: memo };
+  return { DEFAULTS, APPS, GROUP_ROLES, GROUP_CAPS, ROLE_ORDER, can, groupKey, coreBase, resolveRole, allows, classifyMembers, check, loadProjectAccess, describePolicy, renderDenied, deniedReason, tokenGetter, _memo: memo };
 });
