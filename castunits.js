@@ -149,5 +149,30 @@
     return parts.join((o.layout || "lines") === "single" ? ", " : "\n");
   }
 
-  return { CU_PSET, CU, PART_PSET, PART, REBAR_PSET, FIELDS, markPrefix, matchMark, groupCastUnits, prefixGroups, rebarTable, labelText };
+  /**
+   * One setObjectState call per colour instead of one per group (speed audit item 4; the palette has a fixed number of
+   * colours). entries [{objects, colour}] in the order the calls used to be made; an object listed in more than one
+   * entry keeps the colour of its last one, as with the calls in series - so the model looks exactly the same.
+   * Returns [{colour, objects}] (objects in their original order, each once) in the order the colours first appear.
+   */
+  function colourBatches(entries) {
+    const list = entries || [];
+    const ck = (c) => (typeof c === "string" ? c.toLowerCase() : JSON.stringify(c));
+    const last = new Map();   // "modelId:id" -> index of the last entry listing the object
+    list.forEach((e, i) => { for (const o of (e && e.objects) || []) last.set(o.modelId + ":" + o.id, i); });
+    const out = new Map(), done = new Set();
+    list.forEach((e, i) => {
+      for (const o of (e && e.objects) || []) {
+        const k = o.modelId + ":" + o.id;
+        if (last.get(k) !== i || done.has(k)) continue;
+        done.add(k);
+        const c = ck(e.colour);
+        if (!out.has(c)) out.set(c, { colour: e.colour, objects: [] });
+        out.get(c).objects.push(o);
+      }
+    });
+    return [...out.values()];
+  }
+
+  return { CU_PSET, CU, PART_PSET, PART, REBAR_PSET, FIELDS, markPrefix, matchMark, groupCastUnits, prefixGroups, rebarTable, labelText, colourBatches };
 });

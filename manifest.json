@@ -1,5 +1,5 @@
 {
-  "title": "Cast unit tags (Arsten)",
+  "title": "Cast unit tags (Arsten / Multiplan)",
   "url": "https://arsten2026-cell.github.io/trimble-connect-castunit-tags/index.html",
   "icon": "https://arsten2026-cell.github.io/trimble-connect-castunit-tags/icon.svg",
   "description": "Lists Tekla cast units with concrete volume and rebar, tags them with leader labels and shows each cast unit's rebar list (Pos, Ø, pcs, kg).",

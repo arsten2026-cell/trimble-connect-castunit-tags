@@ -247,7 +247,8 @@
     const all = allParts();
     if (!all.length) return;
     if (!state.coloured) return state.api.viewer.setObjectState(selectorFor(all), { color: "reset" });
-    for (const g of state.units) if (g.objects.length) await state.api.viewer.setObjectState(selectorFor(g.objects), { color: g.colour });
+    // one call per colour, not per cast unit (speed audit item 4)
+    for (const b of L.colourBatches(state.units.map((g) => ({ objects: g.objects, colour: g.colour })))) await state.api.viewer.setObjectState(selectorFor(b.objects), { color: b.colour });
   }
   // "Show listed cast units only": only the cast units in the list (after the filter box) stay visible, concrete
   // and rebar. Uses viewer.isolateEntities (as the MCP bridge's verified isolate does); hiding "everything else"
@@ -531,7 +532,7 @@
     const access = await ArstenAccess.check({ api, getToken: tokenHelper.getToken, app: "execution" });
     if (access.allowed) return true;
     denied = true;
-    ArstenAccess.renderDenied(document.body, "bg", access);
+    ArstenAccess.renderDenied(document.body, settings.lang, access);   // the language chosen in this panel (round 11, L2)
     return false;
   }
 
