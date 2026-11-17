@@ -142,7 +142,7 @@
       if (!on.has(f.id)) continue;
       if (f.id === "mark") parts.push(g.label);
       if (f.id === "name" && g.name) parts.push(nameHalf(g.name, lang));
-      if (f.id === "volume") parts.push(bg ? `бетон - ${C.fmtVolume(g.totals.volume)} м³` : `${C.fmtVolume(g.totals.volume)} m³`);
+      if (f.id === "volume") parts.push(bg ? `бетон - ${C.fmtVolume(g.totals.volume, "bg")} м³` : `${C.fmtVolume(g.totals.volume)} m³`);
       if (f.id === "rebar" && g.totals.rebar > 0) parts.push(bg ? `арм. ${fmt(g.totals.rebar, 0)}кг` : `rebar ${fmt(g.totals.rebar, 0)} kg`);
       if (f.id === "material" && g.materials.length) parts.push(bg ? `клас - ${g.materials.join(", ")}` : g.materials.join("+"));
     }

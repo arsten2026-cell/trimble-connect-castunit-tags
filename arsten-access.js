@@ -359,11 +359,11 @@
   const TEXT = {
     bg: { title: "Нямате достъп", ask: "Обърнете се към администратора на проекта.", error: "Правата не можаха да бъдат проверени",
       notMember: "Не сте член на проекта.", yourRole: "Вашата роля", noGroup: "не сте в нито една група на проекта, която дава роля",
-      viaGroup: "от група", needs: "Този инструмент е за", retry: "Провери отново",
+      viaGroup: "от група", needs: "Този инструмент е за", retry: "Провери отново", diag: "Копирай диагностика",
       wait: "Ако току-що сте добавени в група, Connect може да има нужда от няколко минути." },
     en: { title: "No access", ask: "Ask the project admin.", error: "Your access could not be checked",
       notMember: "You are not a project member.", yourRole: "Your role", noGroup: "you are in no project group that gives a role",
-      viaGroup: "from group", needs: "This tool is for", retry: "Check again",
+      viaGroup: "from group", needs: "This tool is for", retry: "Check again", diag: "Copy diagnostics",
       wait: "If you were just added to a group, Connect may need a few minutes." },
   };
   /** Why access was refused, in plain words: the user's role (and its group) and which roles open this tool (week 1, A20). */
@@ -380,13 +380,38 @@
     return lines;
   }
   /** Replace the panel with a short no-access message (no project data) and a "check again" button. */
+  /** Round 16 L2: "Копирай диагностика" on the denied / error screen too (the access-error case is the one most worth
+   *  reporting). Only when arsten-diag.js is loaded in the page; its document-wide click delegation does the copying. */
+  function diagButton(t) {
+    const g = typeof globalThis !== "undefined" ? globalThis : typeof self !== "undefined" ? self : {};
+    if (!g.ArstenDiag) return "";
+    return `<button type="button" data-arsten-diag style="margin-top:12px;margin-left:6px;font:inherit;font-size:12px;padding:4px 10px;border:1px solid #d9d5cc;background:transparent;color:#1f1f1f;cursor:pointer;border-radius:0">${t.diag}</button>`;
+  }
+  /** Round 19 M1: the refusal goes into "Копирай диагностика" (project id + the reason lines), so the copied text says
+   *  why. English lines (for support); names are scrubbed by ArstenDiag's clean(). */
+  function logDenied(access) {
+    const g = typeof globalThis !== "undefined" ? globalThis : typeof self !== "undefined" ? self : {};
+    const D = g.ArstenDiag;
+    if (!D || typeof D.log !== "function") return;
+    const a = access || {};
+    try {
+      if (a.project && a.project.id && typeof D.set === "function") D.set({ projectId: a.project.id });
+      const extra = [];
+      if (a.app) extra.push(`app ${a.app}`);
+      if (a.reason) extra.push(`reason ${a.reason}`);
+      if (Array.isArray(a.roles) && a.roles.length) extra.push(`roles ${a.roles.join(", ")}`);
+      if (Array.isArray(a.caps) && a.caps.length) extra.push(`caps ${a.caps.join(", ")}`);
+      D.log("warn", `access denied${extra.length ? ` (${extra.join("; ")})` : ""}: ${deniedReason("en", a).join(" ")}`);
+    } catch {}
+  }
   function renderDenied(container, lang, access) {
+    logDenied(access);
     const t = TEXT[lang === "en" ? "en" : "bg"];
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     container.innerHTML = `<div style="padding:16px;font:13px/1.45 Ubuntu,'Segoe UI',system-ui,sans-serif;color:#1f1f1f">
       <div style="font-size:15px;font-weight:600;margin-bottom:6px">${esc(t.title)} / ${esc(TEXT[lang === "en" ? "bg" : "en"].title)}</div>
       <div>${esc(t.ask)}</div>${deniedReason(lang, access).map((l) => `<div style="margin-top:6px;font-size:12px;color:#6b6b6b">${esc(l)}</div>`).join("")}
-      <button type="button" data-arsten-retry style="margin-top:12px;font:inherit;font-size:12px;padding:4px 10px;border:1px solid #1f1f1f;background:#1f1f1f;color:#fff;cursor:pointer;border-radius:0">${esc(t.retry)}</button></div>`;
+      <button type="button" data-arsten-retry style="margin-top:12px;font:inherit;font-size:12px;padding:4px 10px;border:1px solid #1f1f1f;background:#1f1f1f;color:#fff;cursor:pointer;border-radius:0">${esc(t.retry)}</button>${diagButton(t)}</div>`;
     const b = typeof container.querySelector === "function" ? container.querySelector("[data-arsten-retry]") : null;
     if (b) b.onclick = () => {
       memo.clear();

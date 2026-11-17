@@ -413,8 +413,15 @@
   ];
 
   const fmt = (v, d) => String(Number(v.toFixed(d)));
-  /** Volume to 1 decimal, but keep 2 for small pours so 0.04 m³ doesn't print as 0. */
-  const fmtVolume = (v) => (v > 0 && v < 1 ? fmt(v, 2) : fmt(v, 1));
+  /** A decimal in the given language: "bg" gives a decimal comma ("37,9"), as ArstenI18n.fmtNum does (round 19 L3). */
+  const fmtDec = (v, d, lang) => {
+    const I = typeof ArstenI18n !== "undefined" ? ArstenI18n : null;
+    if (lang === "bg" && I) return I.fmtNum(v, "bg", d);
+    const s = fmt(v, d);
+    return lang === "bg" ? s.replace(".", ",") : s;
+  };
+  /** Volume to 1 decimal, but keep 2 for small pours so 0.04 m³ doesn't print as 0. lang "bg": decimal comma. */
+  const fmtVolume = (v, lang) => fmtDec(v, v > 0 && v < 1 ? 2 : 1, lang);
   // Pour type is written "English/Български": pick the half for the label language.
   const typeName = (t, lang) => { const [en, bg] = t.split("/"); return ((lang === "bg" ? bg : en) || en || t).trim(); };
 
@@ -428,10 +435,10 @@
       if (!on.has(f.id)) continue;
       switch (f.id) {
         case "number": out.push(g.label); break;
-        case "volume": out.push(bg ? `бетон - ${fmtVolume(t.volume)} м³` : `${fmtVolume(t.volume)} m³`); break;
+        case "volume": out.push(bg ? `бетон - ${fmtVolume(t.volume, "bg")} м³` : `${fmtVolume(t.volume)} m³`); break;
         case "rebar": if (t.rebar > 0) out.push(bg ? `арм. ${fmt(t.rebar, 0)}кг` : `rebar ${fmt(t.rebar, 0)} kg`); break;
-        case "fwSides": if (t.fwSides > 0) out.push(bg ? `кофр. страни - ${fmt(t.fwSides, 1)} м²` : `FW sides ${fmt(t.fwSides, 1)} m²`); break;
-        case "fwBottom": if (t.fwBottom > 0) out.push(bg ? `кофр. долу - ${fmt(t.fwBottom, 1)} м²` : `FW bottom ${fmt(t.fwBottom, 1)} m²`); break;
+        case "fwSides": if (t.fwSides > 0) out.push(bg ? `кофр. страни - ${fmtDec(t.fwSides, 1, "bg")} м²` : `FW sides ${fmt(t.fwSides, 1)} m²`); break;
+        case "fwBottom": if (t.fwBottom > 0) out.push(bg ? `кофр. долу - ${fmtDec(t.fwBottom, 1, "bg")} м²` : `FW bottom ${fmt(t.fwBottom, 1)} m²`); break;
         case "material": if (g.materials.length) out.push(bg ? `клас - ${g.materials.join(", ")}` : g.materials.join("+")); break;
         case "type": if (g.types.length) out.push((bg ? "тип - " : "") + [...new Set(g.types.map((x) => typeName(x, lang)))].join(", ")); break;
         case "embeds": if (g.embeds.length) out.push(bg ? `закл. ч. - ${formatEmbeds(g.embeds)}` : `Embeds ${formatEmbeds(g.embeds)}`); break;

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="bg">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -64,58 +64,61 @@
 </style>
 </head>
 <body>
-<h1>Бетонови елементи</h1>
-<div id="status" class="status">Connecting to Trimble Connect…</div>
+<h1><span data-en="Cast units">Бетонови елементи</span> <select id="selUi" title="Език / Language" style="float:right;margin-left:6px"><option value="bg">BG</option><option value="en">EN</option></select></h1>
+<button type="button" class="small secondary" data-arsten-diag style="float:right;margin-left:6px">Копирай диагностика</button>
+<div id="status" class="status">Trimble Connect…</div>
 
 <div class="bar">
-  <button id="btnShowAll" disabled>Show all tags</button>
-  <button id="btnClear" class="secondary" disabled>Clear tags</button>
-  <button id="btnReload" class="secondary" disabled title="Read the pours again from the loaded models">Reload</button>
-  <button id="btnClearFocus" class="on" hidden title="Make every object opaque again">Clear focus</button>
+  <button id="btnShowAll" disabled data-en="Show all tags">Покажи всички етикети</button>
+  <button id="btnClear" class="secondary" disabled data-en="Clear tags">Изчисти етикетите</button>
+  <button id="btnReload" class="secondary" disabled title="Прочети елементите отново от заредените модели" data-en-title="Read the cast units again from the loaded models" data-en="Reload">Обнови</button>
+  <button id="btnClearFocus" class="on" hidden title="Всички обекти отново плътни" data-en-title="Make every object opaque again" data-en="Clear focus">Без фокус</button>
 </div>
 <div class="bar">
-  <label class="chk"><input type="checkbox" id="chkColour"> Colour each cast unit</label>
-  <label class="chk"><input type="checkbox" id="chkIsolate"> Show listed cast units only</label>
+  <label class="chk"><input type="checkbox" id="chkColour"> <span data-en="Colour each cast unit">Оцвети всеки елемент</span></label>
+  <label class="chk"><input type="checkbox" id="chkIsolate"> <span data-en="Show listed cast units only">Покажи само елементите от списъка</span></label>
 </div>
 
 <details id="optLabel">
-  <summary>Label fields</summary>
+  <summary data-en="Label fields">Полета на етикета</summary>
   <div id="fields" style="margin-top:6px"></div>
   <div style="margin-top:6px">
-    <label class="chk">Language <select id="selLang"><option value="bg">Български</option><option value="en">English</option></select></label>
-    <label class="chk">Layout <select id="selLayout"><option value="lines">One field per line</option><option value="single">One line</option></select></label>
+    <label class="chk"><span data-en="Label language">Език на етикетите</span> <select id="selLang"><option value="bg">Български</option><option value="en">English</option></select></label>
+    <label class="chk"><span data-en="Layout">Подредба</span> <select id="selLayout"><option value="lines" data-en="One field per line">Всяко поле на нов ред</option><option value="single" data-en="One line">На един ред</option></select></label>
   </div>
-  <div style="margin-top:6px"><label class="chk">Leader height <input type="number" id="numLift" min="0.5" max="50" step="0.5" value="1"> m</label>
-    <label class="chk" title="Pushes the label out, away from the middle of the site">Sideways <input type="number" id="numSide" min="0" max="50" step="0.5" value="1"> m</label></div>
+  <div style="margin-top:6px"><label class="chk"><span data-en="Leader height">Височина на водача</span> <input type="number" id="numLift" min="0.5" max="50" step="0.5" value="1"> m</label>
+    <label class="chk" title="Изнася етикета навън, далеч от средата на обекта" data-en-title="Pushes the label out, away from the middle of the site"><span data-en="Sideways">Встрани</span> <input type="number" id="numSide" min="0" max="50" step="0.5" value="1"> m</label></div>
 </details>
 
 <div id="cuWarn" class="warn" hidden></div>
 
 <div id="prefixBox" hidden>
-  <h2>Tag by group</h2>
+  <h2 data-en="Tag by group">Етикети по група</h2>
   <div id="prefixBar" class="pfx"></div>
 </div>
 
-<div class="cuhead"><h2>Cast units</h2>
-  <input id="txtFilter" type="search" placeholder="Filter: FP, FS2 …" autocomplete="off" title="Mark filter: FP = all FP; FP2 = only FP2; several separated by space or comma"><button
-    id="btnShowSel" class="small secondary" title="List only the cast units selected in the model">Show selected</button></div>
+<div class="cuhead"><h2 data-en="Cast units">Елементи</h2>
+  <input id="txtFilter" type="search" placeholder="Филтър: FP, FS2 …" data-en-ph="Filter: FP, FS2 …" autocomplete="off" title="Филтър по марка: FP = всички FP; FP2 = само FP2; няколко, разделени с интервал или запетая" data-en-title="Mark filter: FP = all FP; FP2 = only FP2; several separated by space or comma"><button
+    id="btnShowSel" class="small secondary" title="Покажи в списъка само елементите, избрани в модела" data-en-title="List only the cast units selected in the model" data-en="Show selected">Покажи избраните</button></div>
 <div id="filterActs" class="bar" hidden>
   <span id="filterCount" class="sub"></span>
-  <button id="btnTagShown" class="small secondary">Tag shown</button><button id="btnSelectShown" class="small secondary">Select shown</button>
-  <button id="btnShowAllRows" class="small secondary" hidden title="Show the whole list again">Show all</button>
+  <button id="btnTagShown" class="small secondary" data-en="Tag shown">Етикети на показаните</button><button id="btnSelectShown" class="small secondary" data-en="Select shown">Избери показаните</button>
+  <button id="btnShowAllRows" class="small secondary" hidden title="Покажи отново целия списък" data-en-title="Show the whole list again" data-en="Show all">Покажи всички</button>
 </div>
 <table>
-  <thead><tr><th>Cast unit</th><th class="num">m³</th><th class="num">kg</th></tr></thead>
-  <tbody id="rows"><tr><td colspan="3" class="empty">No pours loaded yet.</td></tr></tbody>
+  <thead><tr><th data-en="Cast unit">Елемент</th><th class="num">m³</th><th class="num">kg</th></tr></thead>
+  <tbody id="rows"><tr><td colspan="3" class="empty" data-en="No cast units loaded yet.">Още няма заредени елементи.</td></tr></tbody>
   <tfoot id="foot"></tfoot>
 </table>
 
 
 <script src="https://cdn.jsdelivr.net/npm/trimble-connect-workspace-api@0.3.38/dist/iife/trimbleconnect.workspace.api.js" integrity="sha384-lFiNt/56q6HnUNbuy0WHO3NP6BkQjY4EH8+5eELYVfnhkB42snRTmSa3UOAlX9gg" crossorigin="anonymous"></script>
 <script src="arsten-perf.js?v=21f7454938"></script>
-<script src="arsten-access.js?v=b6f528e602"></script>
-<script src="common.js?v=d8186cabf4"></script>
-<script src="castunits.js?v=6368fdddf5"></script>
-<script src="app.js?v=d777a2baaf"></script>
+<script src="arsten-diag.js?v=bb0c6351fe"></script>
+<script src="arsten-i18n.js?v=de006467e2"></script>
+<script src="arsten-access.js?v=804b676e26"></script>
+<script src="common.js?v=81e163f7cb"></script>
+<script src="castunits.js?v=6772aa8f23"></script>
+<script src="app.js?v=a2f4bc19eb"></script>
 </body>
 </html>
