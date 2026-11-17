@@ -55,7 +55,7 @@
     "GENERAL CONTRACTOR": ["write"],
   };
   /** Which roles may use which kind of extension. Roles not listed anywhere have no access. */
-  const APPS = { execution: ["admin", "gc"], admin: ["admin"], projectStatus: ["admin", "client", "gc"], assembly: ["admin", "gc", "designer"], acceptance: ["admin", "gc", "designer"] };   // projectStatus: GC too (user, 12.11)
+  const APPS = { execution: ["admin", "gc"], admin: ["admin"], projectStatus: ["admin", "client", "gc"], assembly: ["admin", "gc", "designer"], acceptance: ["admin", "gc", "designer"], activities: ["admin", "gc"] };   // activities: Дейности (17.11.2026)   // projectStatus: GC too (user, 12.11)
   /** The role SHOWN when someone is in several groups (display only: rights are the union of all roles, round 11 M4).
    *  Same order as plugins/arsten-docs/src/roles.ts. */
   const ROLE_ORDER = ["admin", "gc", "designer", "client", "subcontractor", "fabricator", "viewer"];

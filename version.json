@@ -1,8 +1,8 @@
 {
   "panel": "castunit-tags",
   "repo": "arsten2026-cell/trimble-connect-castunit-tags",
-  "id": "55c28c1ba3",
-  "built": "2026-11-17T02:54:52.544Z",
+  "id": "2894fada3e",
+  "built": "2026-11-17T21:10:51.739Z",
   "files": {
     "app.js": "a2f4bc19eb",
     "arsten-perf.js": "21f7454938",
@@ -10,9 +10,9 @@
     "arsten-i18n.js": "de006467e2",
     "common.js": "81e163f7cb",
     "castunits.js": "6772aa8f23",
-    "arsten-access.js": "804b676e26",
+    "arsten-access.js": "253829d007",
     "manifest.json": "d7d213f867",
     "icon.svg": "4402c7fe09",
-    "index.html": "a101476796"
+    "index.html": "d689051f51"
   }
 }
