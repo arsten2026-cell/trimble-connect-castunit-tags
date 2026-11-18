@@ -174,5 +174,111 @@
     return [...out.values()];
   }
 
-  return { CU_PSET, CU, PART_PSET, PART, REBAR_PSET, FIELDS, markPrefix, matchMark, groupCastUnits, prefixGroups, rebarTable, labelText, colourBatches };
+  /** Run async jobs a few at a time (results in the order of items). */
+  async function pool(items, n, fn) {
+    const out = new Array(items.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+      while (next < items.length) { const k = next++; out[k] = await fn(items[k], k); }
+    }));
+    return out;
+  }
+
+  /**
+   * The cast unit (ElementAssembly) parents of the concrete parts, when getObjects lists no assemblies (sweep 18.11.2026).
+   * It was one getParents([id]) call per part: 5 000 parts = 5 000 viewer round trips, 30+ s on a phone. Now the parts
+   * go in chunks (default 200 ids, 4 at a time) and every returned parent is kept; only the set of parents is needed,
+   * the part -> parent mapping comes from getChildren of each parent. Whatever is not covered by the children of the
+   * found parents (a chunk call that threw, or a viewer that answers a many-id call with the first id's parent only)
+   * is asked again one id at a time, as before - so the result is never worse than the old per-part path.
+   * No Workspace API here: getParents(ids) -> [{id, name}], getChildren(parentId) -> [child ids] are passed in.
+   * Returns { parents: Map id -> {id, name}, kids: Map parentId -> [child ids], noParent, calls }.
+   */
+  async function findParents(partIds, getParents, getChildren, opts) {
+    const o = opts || {};
+    const chunk = o.chunk || 200, poolN = o.pool || 4, poolOne = o.poolOne || 8;
+    const parents = new Map(), kids = new Map();
+    // failed: viewer reads that threw and were not covered by another pass, so the caller can say "press Reload"
+    // instead of blaming the export (sweep 18.11.2026)
+    let noParent = 0, calls = 0, failed = 0;
+    const add = (p) => { if (p && p.id != null && !parents.has(p.id)) parents.set(p.id, { id: p.id, name: p.name || "" }); };
+    const chunks = [];
+    for (let i = 0; i < partIds.length; i += chunk) chunks.push(partIds.slice(i, i + chunk));
+    await pool(chunks, poolN, async (ids) => {
+      calls++;
+      try { for (const p of (await getParents(ids)) || []) add(p); } catch { /* covered by the per-id pass below */ }
+    });
+    const covered = new Set();
+    const readKids = async (pid) => {
+      if (kids.has(pid)) return;
+      let list = [];
+      try { list = (await getChildren(pid)) || []; } catch { failed++; }
+      kids.set(pid, list);
+      for (const c of list) covered.add(c);
+    };
+    await pool([...parents.keys()], poolOne, readKids);
+    const rest = partIds.filter((id) => !covered.has(id));
+    // each worker takes its own run of neighbouring ids, in series: the parts of one cast unit are usually listed
+    // together, so once a worker found their parent the next ones are covered and not asked (8 workers on adjacent
+    // ids would all ask about the same cast unit at once)
+    const runs = [];
+    const step = Math.ceil(rest.length / poolOne) || 1;
+    for (let i = 0; i < rest.length; i += step) runs.push(rest.slice(i, i + step));
+    await pool(runs, poolOne, async (run) => {
+      for (const id of run) {
+        if (covered.has(id)) continue;   // a parent found meanwhile in this pass already holds it
+        calls++;
+        try {
+          const ps = (await getParents([id])) || [];
+          if (!ps[0]) { noParent++; continue; }
+          add(ps[0]);
+          await readKids(ps[0].id);
+        } catch { noParent++; failed++; }
+      }
+    });
+    return { parents, kids, noParent, calls, failed };
+  }
+
+  /** Key of the loaded models, as Монолитен бетон / Статус (U.modelSetKey): "id@versionId" sorted; null when it cannot be
+   *  compared safely (nothing loaded, or a model without id / versionId: then the panel always reads again). */
+  function modelSetKey(specs) {
+    if (!Array.isArray(specs) || !specs.length) return null;
+    const out = new Set();
+    for (const m of specs) {
+      if (!m || m.id == null || m.id === "" || m.versionId == null || m.versionId === "") return null;
+      out.add(String(m.id) + "@" + String(m.versionId));
+    }
+    return [...out].sort().join("|");
+  }
+
+  /** sessionStorage key of "this model version has no cast units". Not the pour key of Монолитен бетон (U.noPourKey):
+   *  a model without pour objects can still hold cast units, and the other way round. */
+  const noCastUnitKey = (projectId, modelId, ver) => `arsten.castUnitScan.v1.${projectId || "?"}.${modelId}@${ver}`;
+  /**
+   * Every loaded model through scanOne(m) -> {units, failed, noParent}, `limit` models at a time (default 2), results in
+   * model order (sweep 18.11.2026). It was one model after the other, so the structure waited for a full property read
+   * of the architecture and MEP models loaded beside it. As Монолитен бетон's scanPours, a model version remembered
+   * without cast units (o.cache, by o.versions modelId -> versionId and the object count) is skipped, and one read
+   * without any - and without a failed read, which may be the reason none were found - is remembered.
+   * o: {limit, versions: Map, cache: {get, set, drop}, projectId}. Returns {results, skipped}.
+   */
+  async function scanModels(modelObjs, scanOne, o) {
+    o = o || {};
+    let skipped = 0;
+    const empty = () => ({ units: [], failed: 0, noParent: 0 });
+    const results = await pool(modelObjs || [], o.limit || 2, async (m) => {
+      const n = (m.objects || []).length;
+      if (!n) return empty();
+      const ver = o.versions && o.versions.get(m.modelId);
+      const key = ver && o.cache ? noCastUnitKey(o.projectId, m.modelId, ver) : null;
+      if (key) { const c = o.cache.get(key); if (c && c.hasUnits === false && c.n === n) { skipped++; return empty(); } }
+      const r = await scanOne(m);
+      if (key) { if (r.units.length) o.cache.drop(key); else if (!r.failed) o.cache.set(key, { n, hasUnits: false }); }
+      return r;
+    });
+    return { results, skipped };
+  }
+
+  return { CU_PSET, CU, PART_PSET, PART, REBAR_PSET, FIELDS, markPrefix, matchMark, groupCastUnits, prefixGroups, rebarTable, labelText, colourBatches,
+    pool, findParents, modelSetKey, noCastUnitKey, scanModels };
 });

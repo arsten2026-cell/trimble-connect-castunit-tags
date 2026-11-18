@@ -8,7 +8,7 @@
 //    Stored records and file names stay ISO; this is for display only.
 //  - fmtNum: BG "3 292" / "37,9", EN "3,292" / "37.9".
 //  - plural: Bulgarian counted form ("1 такт" / "2 такта").
-//  - err: errors start with "Грешка:" / "Error:".
+//  - err: errors start with "Грешка:" / "Error:"; friendly: an error in plain words with what to do (sweep 18.11.2026).
 //  - logText: a stored history line (English, parsers rely on it) shown in Bulgarian. The stored text is NOT changed.
 // Master: shared/arsten-i18n.js (copied into each panel by `node scripts/release.mjs sync`).
 // Load it in index.html after arsten-perf.js and before app.js. Browser: window.ArstenI18n; Node: module.exports.
@@ -116,6 +116,67 @@
     return (lang === "en" ? "Error: " : "Грешка: ") + msg;
   }
 
+  // ---------- errors in plain words (sweep 18.11.2026) ----------
+  // Users saw raw API texts ("Грешка: upload PUT 413", "Core PATCH …: 500", "folder not created: …") and a Bulgarian
+  // timeout text in English. friendly(e, lang) says what happened and what to do, by e.status / e.timeout; the raw
+  // message goes to the console (and so to "Копирай диагностика"). An error WITHOUT a status whose text is not technical
+  // (a panel's own sentence, e.g. "Нямате права…") is shown as it is.
+  const FRIENDLY = {
+    net: ["Няма връзка с Connect – проверете интернета и опитайте пак.", "No connection to Connect – check the internet and try again."],
+    busy: ["Connect е зает – опитайте след минута.", "Connect is busy – try again in a minute."],
+    auth: ["Сесията изтече – презаредете страницата.", "Session expired – reload the page."],
+    denied: ["Нямате права за това в Connect.", "You have no permission for this in Connect."],
+    noAccess: ["Нямате достъп до папката в Connect – помолете администратора на проекта.", "No access to the folder in Connect – ask the project administrator."],
+    // sweep 18.11.2026: most panels (Монолитен бетон, Стомана, Дейности, Статус) have no Обнови button, so the default
+    // says to reopen the panel; a panel WITH the button passes {refresh: "button"} (changedButton)
+    changed: ["Данните са променени от друг потребител – затворете и отворете панела отново.", "Someone else changed this – close and reopen the panel."],
+    changedButton: ["Данните са променени междувременно – натиснете Обнови.", "The data changed meanwhile – press Refresh."],
+    big: ["Снимката е твърде голяма.", "The photo is too large."],
+    cut: ["Папката в Connect има твърде много файлове – преместете излишните и опитайте пак.", "The folder in Connect holds too many files – move the extra ones out and try again."],
+    other: ["Нещо се обърка – опитайте пак; ако се повтаря, натиснете „Копирай диагностика“.", "Something went wrong – try again; if it repeats, press \"Copy diagnostics\"."],
+  };
+  const TECH = /^(?:Core |upload|files?\/|folders?\b|folder not|photo|activities|PATCH|PUT|GET|POST|DELETE|HTTP|request|fetch)|\b[45]\d\d\b|TypeError|ReferenceError|SyntaxError|undefined|\bnull\b|Failed to fetch|NetworkError|Load failed|aborted|AbortError/i;
+  const NET = /Failed to fetch|NetworkError|Load failed|network|не отговаря/i;
+  /** The plain sentence for an error. opts.noWrite: the panel's own 403 text ("no permission to write to <library>");
+   *  opts.refresh: "button" when the panel has an Обнови / Refresh button, else (default) "reopen the panel". */
+  function friendly(e, lang, opts) {
+    const i = lang === "en" ? 1 : 0, o = opts || {};
+    const msg = errMsg(e), st = e && typeof e === "object" ? Number(e.status) : NaN;
+    const say = (k) => { if (msg) console.warn("[error]", msg); return FRIENDLY[k][i]; };
+    if (e && e.noAccess) return say("noAccess");
+    if (e && e.code === "FOLDER_LISTING_CUT") return say("cut");
+    if ((e && e.timeout) || st === 0 || (!isFinite(st) && NET.test(msg))) return say("net");
+    if (st === 429 || st === 503 || st === 502 || st === 504) return say("busy");
+    if (st === 401) return say("auth");
+    if (st === 403) { if (msg) console.warn("[error]", msg); return o.noWrite || FRIENDLY.denied[i]; }
+    if (st === 404 || st === 409 || st === 412) return say(o.refresh === "button" ? "changedButton" : "changed");
+    if (st === 413) return say("big");
+    if (isFinite(st) && st) return say("other");
+    if (!msg || TECH.test(msg)) return say("other");
+    return msg.replace(/^(?:Error|Грешка)\s*:\s*/i, "");
+  }
+  /** "Няма връзка…" -> "няма връзка…" inside a sentence; "Connect е зает" stays. */
+  const lowerFirst = (s) => (/^[A-ZА-Я][a-zа-я]/.test(s) && !/^(?:Connect|Trimble)\b/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
+  /**
+   * The result of a batch (several pours / pieces saved one by one) in plain words, result first (sweep 18.11.2026:
+   * "Кофраж: записано 0 · 3 грешки (Failed to fetch)" did not say whether anything was saved or what to do).
+   * e: the first error (friendly(), the raw text to the console). opts: friendly's opts plus units {bg: [one, many],
+   * en: [one, many]} for "за 3 такта" / "for 3 pours".
+   *   all saved:  "Кофраж: записано 3"
+   *   none saved: "Кофраж: не е записано за 3 такта – няма връзка с Connect – проверете интернета и опитайте пак."
+   *   some saved: "Кофраж: записано 2, незаписано 1 – …"
+   */
+  function batchText(what, saved, failed, e, lang, opts) {
+    const en = lang === "en", o = opts || {};
+    saved = Number(saved) || 0; failed = Number(failed) || 0;
+    if (!failed) return savedMsg(what, saved, lang);
+    const why = lowerFirst(friendly(e, lang, o));
+    const u = o.units && o.units[en ? "en" : "bg"];
+    const unit = u ? ` ${en ? "for" : "за"} ${failed} ${plural(failed, u[0], u[1])}` : "";
+    if (!saved) return en ? `${what}: not saved${unit} – ${why}` : `${what}: не е записано${unit} – ${why}`;
+    return en ? `${what}: ${saved} saved, ${failed} not saved – ${why}` : `${what}: записано ${saved}, незаписано ${failed} – ${why}`;
+  }
+
   // words every panel shows the same way
   const WORDS = {
     connecting: ["Свързване с Trimble Connect…", "Connecting to Trimble Connect…"],
@@ -130,6 +191,47 @@
     brand: ["Arsten / Multiplan", "Arsten / Multiplan"],
   };
   const word = (k, lang) => (WORDS[k] ? WORDS[k][lang === "en" ? 1 : 0] : k);
+
+  // ---------- the Workspace API script did not load (sweep 18.11.2026) ----------
+  // Every index.html loads trimble-connect-workspace-api from cdn.jsdelivr.net (with an SRI hash). When jsdelivr is slow
+  // or blocked (weak site link, company firewall, captive portal) or the hash check fails, TrimbleConnectWorkspace is
+  // missing, connect() throws a ReferenceError and the panel stayed on "Свързване…" for ever with no reason and no retry.
+  // Each app.js calls workspaceMissing(lang, {setStatus, el}) before connect(): true = missing; the status line then says
+  // so in plain words and a "Опитай пак" button reloads the page. The <script> tag's onerror can call it too.
+  const NO_WORKSPACE = ["модулът на Connect не се зареди – проверете интернета (или мрежовата защита) и опитайте пак.",
+    "the Connect module did not load – check the internet (or the network firewall) and try again."];
+  const RETRY = ["Опитай пак", "Try again"];
+  /** The plain sentence shown when the Workspace API is missing. */
+  const workspaceText = (lang) => `${word("connectFail", lang)} – ${NO_WORKSPACE[lang === "en" ? 1 : 0]}`;
+  /**
+   * true when the Workspace API script is not there (and the message and a retry button are shown); false when it is.
+   * o: {setStatus(text, bad)?, el? (element the button goes after; default #status, else the end of <body>),
+   *     global? (tests), reload? (tests; default location.reload)}
+   */
+  function workspaceMissing(lang, o) {
+    o = o || {};
+    const g = o.global || (typeof globalThis !== "undefined" ? globalThis : typeof self !== "undefined" ? self : {});
+    if (g.TrimbleConnectWorkspace && typeof g.TrimbleConnectWorkspace.connect === "function") return false;
+    const text = workspaceText(lang);
+    console.warn("[error] TrimbleConnectWorkspace is not loaded (CDN blocked, slow or SRI mismatch)");
+    try {
+      if (o.setStatus) o.setStatus(text, true);
+      const doc = g.document;
+      if (doc && doc.createElement) {
+        const at = o.el || (doc.getElementById && doc.getElementById("status")) || null;
+        if (!o.setStatus && at) at.textContent = text;
+        if (!(doc.querySelector && doc.querySelector("[data-arsten-retry]"))) {
+          const b = doc.createElement("button");
+          b.type = "button"; b.className = "small"; b.textContent = RETRY[lang === "en" ? 1 : 0];
+          b.setAttribute("data-arsten-retry", "1");
+          b.onclick = () => { try { (o.reload || (() => g.location.reload()))(); } catch {} };
+          if (at && at.parentNode) at.parentNode.insertBefore(b, at.nextSibling);
+          else if (doc.body) doc.body.appendChild(b);
+        }
+      }
+    } catch (e) { console.warn("workspaceMissing: message not shown", e); }
+    return true;
+  }
   /** One wording for success messages: "<етап>: записано N" / "<stage>: saved N". */
   const savedMsg = (what, n, lang) => `${what}: ${word("saved", lang)} ${n}`;
 
@@ -164,10 +266,13 @@
     [/^photos \+(\d+) by /, (_, n) => `снимки +${n} от `],
     [/^round (\d+): (approved|remarks|rejected) by /, (_, r, d) => `кръг ${r}: ${DEC_BG[d]} от `],
   ];
+  const BASIS = / \{for (.*?) · (formwork|rebar|both) · (\d+) photos #[0-9a-f]{8}\}/;
   const TAILS = [
     [/ – reopened after rejection \(round (\d+)\)/, (_, r) => ` – отворено отново след отказ (кръг ${r})`],
     [/ \(cleared\)/, () => " (изтрита)"],
     [/ – pour break, by /, () => " – фуга, от "],
+    // what an acceptance decision was given for (arsten-acceptance.js basisTag, sweep 18.11.2026); the hash is not shown
+    [BASIS, (_, p, s, n) => ` (за ${p} · ${stepBg(s)} · ${n} ${plural(n, "снимка", "снимки")})`],
   ];
   /**
    * A stored history entry for display. lang "en": as stored. lang "bg": the fixed verbs in Bulgarian and ISO dates
@@ -176,7 +281,7 @@
    */
   function logText(line, lang) {
     const s = String(line == null ? "" : line);
-    if (lang === "en") return s;
+    if (lang === "en") return s.replace(BASIS, (_, p, st, n) => ` (for ${p} · ${st} · ${n} photo${n === "1" ? "" : "s"})`);
     const m = /^(\d{4}-\d{2}-\d{2}) (?:(\d{2}:\d{2}) )?([\s\S]*)$/.exec(s);
     const head = m ? `${fmtDate(m[1], "bg")} ${m[2] ? m[2] + " " : ""}` : "";
     let what = m ? m[3] : s;
@@ -199,5 +304,5 @@
     return head + first + rest;
   }
 
-  return { KEY, OLD_KEYS, stored, getLang, setLang, fromLocale, pickLang, fmtDate, fmtNum, plural, err, word, savedMsg, logText, WORDS };
+  return { KEY, OLD_KEYS, stored, getLang, setLang, fromLocale, pickLang, fmtDate, fmtNum, plural, err, friendly, batchText, FRIENDLY, word, workspaceMissing, workspaceText, savedMsg, logText, WORDS };
 });

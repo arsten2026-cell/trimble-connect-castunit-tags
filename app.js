@@ -8,6 +8,7 @@
   const $ = (id) => document.getElementById(id);
   const TAG_COLOUR = { r: 200, g: 16, b: 46, a: 255 };
   const BATCH = 200;
+  const MARKUP_CHUNK = 200;            // markups per addTextMarkup call (one call for a normal model)
   const BBOX_TO_MM = 1000;             // bounding boxes come in metres, markups in millimetres
   const HIERARCHY_ASSEMBLY = 4;        // HierarchyType.ElementAssembly
   const FOCUS_OPACITY = 0.5, FOCUS_GREY = "#9E9E9E";
@@ -77,67 +78,89 @@
   const errText = (e) => (e && (e.message || e.toString())) || String(e);
   const objKey = (o) => o.modelId + ":" + o.id;
 
-  // Run async jobs a few at a time.
-  async function pool(items, n, fn) {
-    const out = new Array(items.length);
-    let next = 0;
-    await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
-      while (next < items.length) { const k = next++; out[k] = await fn(items[k], k); }
-    }));
-    return out;
-  }
+  const pool = L.pool;   // run async jobs a few at a time (castunits.js)
 
   // ---------- reading the model ----------
+  // A model version read in full without cast units (sweep 18.11.2026, as Монолитен бетон's scanPours): sessionStorage,
+  // so a stage switch or another open in this browser tab skips it instead of reading every object again.
+  const scanCache = {
+    get: (k) => { try { const st = window.sessionStorage; return st ? JSON.parse(st.getItem(k) || "null") : null; } catch { return null; } },
+    set: (k, v) => { try { window.sessionStorage.setItem(k, JSON.stringify(v)); } catch {} },
+    drop: (k) => { try { window.sessionStorage.removeItem(k); } catch {} },
+  };
   async function loadCastUnits() {
     const api = state.api;
     setStatus(L2("Четене на елементите от заредените модели…", "Reading cast units from the loaded models…"));
     const modelObjs = (await api.viewer.getObjects()) || [];
-    const units = [];
-    let scanned = 0, noParent = 0;
-    for (const m of modelObjs) {
+    let scanned = 0;
+    // The models are read 2 at a time (castunits.js scanModels), in model order in the result: the structure no longer
+    // waits for a full property read of the architecture and MEP models loaded beside it. A model version found without
+    // cast units is remembered for this browser tab and skipped on the next open / stage switch (sweep 18.11.2026).
+    const versions = new Map();
+    for (const s of await loadedSpecs()) if (s && s.versionId) { if (s.id != null) versions.set(s.id, s.versionId); versions.set(s.versionId, s.versionId); }
+    const scan = await L.scanModels(modelObjs, scanModel, { limit: 2, versions, cache: scanCache, projectId: state.projectId });
+    const units = [].concat(...scan.results.map((r) => r.units));
+    const noParent = scan.results.reduce((n, r) => n + r.noParent, 0);
+    // viewer reads after the scan that threw (model unloaded / restreamed mid-scan, slow phone, call rejected under load):
+    // they leave gaps, so the panel must say "press Reload" and not blame the export or say there are no cast units
+    // (sweep 18.11.2026)
+    const failed = scan.results.reduce((n, r) => n + r.failed, 0);
+    /** One model: every object, the cast unit parents, their psets, children and boxes. Returns {units, failed, noParent}. */
+    async function scanModel(m) {
+      const units = [];
+      let failed = 0, noParent = 0;
       const ids = (m.objects || []).map((o) => o.id);
       const props = new Map();
-      for (let i = 0; i < ids.length; i += BATCH) {
-        for (const p of (await api.viewer.getObjectProperties(m.modelId, ids.slice(i, i + BATCH))) || []) props.set(p.id, p);
-        scanned += Math.min(BATCH, ids.length - i);
+      // every object of the model has to be read (no class filter fits a CIP export): 4 chunks at a time, not in series (sweep 18.11.2026)
+      const idChunks = [];
+      for (let i = 0; i < ids.length; i += BATCH) idChunks.push(ids.slice(i, i + BATCH));
+      await pool(idChunks, 4, async (chunk) => {
+        for (const p of (await api.viewer.getObjectProperties(m.modelId, chunk)) || []) props.set(p.id, p);
+        scanned += chunk.length;
         setStatus(L2(`Четене на елементите… проверени ${scanned} обекта`, `Reading cast units… ${scanned} objects checked`));
-      }
+      });
       const isRebar = (p) => !!C.readPset(p, L.REBAR_PSET);
       const isAssembly = (p) => /elementassembly/i.test(String(p.class || ""));
       const partIds = [...props.values()].filter((p) => !isRebar(p) && !isAssembly(p) && C.readPset(p, L.PART_PSET)).map((p) => p.id);
       // Cast units: assemblies listed by getObjects, or else the ElementAssembly parent of each concrete part.
       const parents = new Map();   // assembly id -> {id, name}
       for (const p of props.values()) if (isAssembly(p)) parents.set(p.id, { id: p.id, name: (p.product && p.product.name) || "" });
+      const getKids = async (pid) => ((await api.viewer.getHierarchyChildren(m.modelId, [pid], HIERARCHY_ASSEMBLY)) || []).map((c) => c.id);
+      let kidsOf = new Map();   // assembly id -> child ids (read once)
       if (!parents.size) {
-        await pool(partIds, 8, async (id) => {
-          try {
-            const ps = (await api.viewer.getHierarchyParents(m.modelId, [id], HIERARCHY_ASSEMBLY)) || [];
-            if (ps[0]) { if (!parents.has(ps[0].id)) parents.set(ps[0].id, { id: ps[0].id, name: ps[0].name || "" }); }
-            else noParent++;
-          } catch { noParent++; }
-        });
+        // parents in chunks of 200 part ids, not one viewer call per part; the parts the found parents do not cover
+        // are asked one by one, as before (sweep 18.11.2026, castunits.js findParents)
+        const found = await L.findParents(partIds, (chunk) => api.viewer.getHierarchyParents(m.modelId, chunk, HIERARCHY_ASSEMBLY), getKids);
+        for (const [k, v] of found.parents) parents.set(k, v);
+        kidsOf = found.kids;
+        noParent += found.noParent;
+        failed += found.failed || 0;
         setStatus(L2(`Четене на елементите… намерени ${parents.size}`, `Reading cast units… ${parents.size} found`));
       }
       const parentIds = [...parents.keys()];
+      // The reads after the scan run 4 chunks at a time too, and the cast unit psets (need parentIds only) are read while the
+      // children, the missing children and the bounding boxes (need the part ids) are read: they were serial awaits per
+      // 200-id chunk, 15-30 round trips per model on 1028 (sweep 18.11.2026)
+      const chunked = (ids) => { const out = []; for (let i = 0; i < ids.length; i += BATCH) out.push(ids.slice(i, i + BATCH)); return out; };
       // the cast unit pset sits on the assembly itself
       const unitProps = new Map();
-      for (let i = 0; i < parentIds.length; i += BATCH) {
-        try { for (const p of (await api.viewer.getObjectProperties(m.modelId, parentIds.slice(i, i + BATCH))) || []) unitProps.set(p.id, p); } catch {}
-      }
+      const unitRead = pool(chunked(parentIds), 4, async (chunk) => {
+        try { for (const p of (await api.viewer.getObjectProperties(m.modelId, chunk)) || []) unitProps.set(p.id, p); } catch { failed++; }
+      });
       let guids = [];
-      try { guids = (await api.viewer.convertToObjectIds(m.modelId, parentIds)) || []; } catch {}
+      const guidRead = (async () => { if (!parentIds.length) return; try { guids = (await api.viewer.convertToObjectIds(m.modelId, parentIds)) || []; } catch { failed++; } })();
       const kids = await pool(parentIds, 8, async (pid) => {
-        try { return ((await api.viewer.getHierarchyChildren(m.modelId, [pid], HIERARCHY_ASSEMBLY)) || []).map((c) => c.id); }
-        catch { return []; }
+        if (kidsOf.has(pid)) return kidsOf.get(pid);
+        try { return await getKids(pid); } catch { failed++; return []; }
       });
       // children not in the getObjects list (rare): read their properties too
       const missing = [...new Set(kids.flat())].filter((id) => !props.has(id));
-      for (let i = 0; i < missing.length; i += BATCH) {
-        try { for (const p of (await api.viewer.getObjectProperties(m.modelId, missing.slice(i, i + BATCH))) || []) props.set(p.id, p); } catch {}
-      }
+      await pool(chunked(missing), 4, async (chunk) => {
+        try { for (const p of (await api.viewer.getObjectProperties(m.modelId, chunk)) || []) props.set(p.id, p); } catch { failed++; }
+      });
+      // concrete parts and rebars of each cast unit (needs the children's properties, not the unit psets)
       const partSet = new Set();
-      parentIds.forEach((pid, k) => {
-        const up = unitProps.get(pid);
+      const content = parentIds.map((pid, k) => {
         const parts = [], rebars = [];
         for (const cid of kids[k]) {
           const p = props.get(cid);
@@ -146,18 +169,27 @@
           if (rb) rebars.push({ modelId: m.modelId, id: cid, props: rb });
           else if (!isAssembly(p)) { parts.push({ modelId: m.modelId, id: cid, props: C.readPset(p, L.PART_PSET) || {} }); partSet.add(cid); }
         }
+        return { parts, rebars };
+      });
+      // grouping is done: the raw properties of every object (walls of other trades, openings, ...) are not needed any more,
+      // so they are not kept while the bounding boxes and the next model are read (sweep 18.11.2026)
+      props.clear();
+      // bounding boxes of the concrete parts (tag anchors), read while the unit psets may still be coming in
+      const boxes = new Map();
+      await Promise.all([unitRead, guidRead, pool(chunked([...partSet]), 4, async (chunk) => {
+        try { for (const b of (await api.viewer.getObjectBoundingBoxes(m.modelId, chunk)) || []) boxes.set(b.id, b.boundingBox); } catch { failed++; }
+      })]);
+      parentIds.forEach((pid, k) => {
+        const up = unitProps.get(pid);
+        const { parts, rebars } = content[k];
         if (!parts.length && !rebars.length) return;
         units.push({ modelId: m.modelId, id: pid, guid: guids[k] || null,
           name: (up && up.product && up.product.name) || parents.get(pid).name || "",
           cu: up ? C.readPset(up, L.CU_PSET) : null, parts, rebars });
       });
-      // bounding boxes of the concrete parts (tag anchors)
-      const pids = [...partSet];
-      const boxes = new Map();
-      for (let i = 0; i < pids.length; i += BATCH) {
-        try { for (const b of (await api.viewer.getObjectBoundingBoxes(m.modelId, pids.slice(i, i + BATCH))) || []) boxes.set(b.id, b.boundingBox); } catch {}
-      }
-      for (const u of units) if (u.modelId === m.modelId) for (const p of u.parts) p.bbox = boxes.get(p.id) || null;
+      unitProps.clear();
+      for (const u of units) for (const p of u.parts) p.bbox = boxes.get(p.id) || null;
+      return { units, failed, noParent };
     }
     // several models: names, and never count two versions of one file
     const models = await loadedModels(modelObjs);
@@ -169,9 +201,23 @@
     state.units = groups;
     state.multiModel = new Set(dd.items.map((u) => u.modelId)).size > 1;
     render();
-    if (!groups.length) {
+    state.failedReads = failed;
+    const failedText = () => L2(`${failed} ${failed === 1 ? "четене" : "четения"} от модела не ${failed === 1 ? "успя" : "успяха"} – натиснете Обнови.`,
+      `${failed} model ${failed === 1 ? "read" : "reads"} failed – press Reload.`);
+    if (failed) {
+      // the list may be short, marks may show "?" and tags may be missing because of the failed reads, not the export:
+      // no export / "no cast units" advice, only Reload (sweep 18.11.2026)
+      const listed = groups.length
+        ? L2(`${unitsWord(dd.items.length)} в ${groups.length} ${groups.length === 1 ? "ред" : "реда"} (може да не са всички). `, `${unitsWord(dd.items.length)} in ${groups.length} ${groups.length === 1 ? "row" : "rows"} (maybe not all). `)
+        : "";
+      setStatus(() => (groups.length ? listed : "") + failedText(), true);
+      $("cuWarn").hidden = true;
+      $("cuWarn").textContent = "";
+    } else if (!groups.length) {
       setStatus(() => L2(`Няма бетонови елементи: проверени ${scanned} обекта. Заредете Tekla IFC, експортиран с „CIP cast units or parts“.`, `No cast units found: ${scanned} objects checked. Load a Tekla IFC exported with "CIP cast units or parts".`) +
-        (noParent ? L2(` ${noParent} бетонови части нямат родителски елемент.`, ` ${noParent} concrete parts have no cast unit parent.`) : ""), true);
+        (noParent ? L2(` ${noParent} бетонови части нямат родителски елемент.`, ` ${noParent} concrete parts have no cast unit parent.`) : "") +
+        (scan.skipped ? L2(` (${scan.skipped} ${pl(scan.skipped, "модел", "модела", "", "")} без елементи от по-рано: не са четени пак.)`,
+          ` (${scan.skipped} model${scan.skipped > 1 ? "s" : ""} known to have no cast units: not read again.)`) : ""), true);
     } else {
       const withPset = dd.items.filter((u) => u.cu).length;
       const rebarKg = groups.reduce((n, g) => n + g.totals.rebar, 0);
@@ -187,6 +233,50 @@
         : L2(`${dd.items.length - withPset} от ${dd.items.length} ${pl(dd.items.length, "елемент", "елемента")} ${dd.items.length - withPset === 1 ? "няма" : "нямат"} набор свойства ${L.CU_PSET} (марка „?“).`, `${dd.items.length - withPset} of ${dd.items.length} cast units have no ${L.CU_PSET} property set (mark "?").`);
     }
     for (const b of ["btnShowAll", "btnClear", "btnReload"]) $(b).disabled = false;
+    return true;
+  }
+
+  // ---------- loads: one at a time; a model event with the same models re-reads nothing (sweep 18.11.2026) ----------
+  // Connect fires onModelStateChanged for streaming and visibility changes too. Each one used to remove every tag and read
+  // every object of every model again, and two reads could overlap (double scan, tags removed / added twice). As Статус
+  // (viewer-project-status loadOnce / runLoad): same model set (id@versionId) -> colours only; loads run one at a time
+  // and any number of events while one runs queue exactly ONE more.
+  async function loadedSpecs() { try { return (await state.api.viewer.getModels("loaded")) || []; } catch { return []; } }
+  let lastModelsKey = null, loadRun = null, loadNext = null;
+  async function loadOnce(force) {
+    const key = L.modelSetKey(await loadedSpecs());
+    if (!force && key != null && key === lastModelsKey) {
+      console.info("[castunit-tags] model event: the loaded models did not change - no reload");
+      if (state.coloured && state.focusKey == null) await applyColours();
+      return;
+    }
+    lastModelsKey = null;
+    if (!force) setStatus(L2("Моделите са променени, елементите се четат отново…", "Models changed, reading cast units again…"));
+    // the focus, "Show selected" and the selected groups refer to the old list: drop them, or the row still says
+    // "Clear focus", the next Focus tap clears instead of focusing and the colour box does nothing (sweep 18.11.2026)
+    const wasFocus = state.focusKey != null;
+    state.focusKey = null; state.focusTagAdded = false;
+    state.selKeys = null; state.selPrefixes.clear();
+    await removeTags([...state.tags.keys()]);
+    await loadCastUnits();
+    lastModelsKey = key;
+    if (wasFocus) {
+      // models that stayed loaded are still grey at 50 % from the focus
+      const all = await everyObject();
+      if (all.length) await state.api.viewer.setObjectState(selectorFor(all), { color: "reset", opacity: 1 });
+    }
+    if (state.coloured) await applyColours();
+  }
+  /** force: the first load and the Reload button; a model event is not forced and is skipped for the same model set. */
+  function runLoad(force) {
+    if (loadRun) {
+      if (loadNext) { if (force) loadNext.force = true; return loadNext.p; }
+      const q = loadNext = { force: !!force };
+      q.p = loadRun.then(() => { loadNext = null; return runLoad(q.force); });
+      return q.p;
+    }
+    const run = loadRun = (async () => { try { await guarded(() => loadOnce(force)); } finally { if (loadRun === run) loadRun = null; } })();
+    return run;
   }
 
   async function loadedModels(modelObjs) {
@@ -247,20 +337,35 @@
     }
     return out;
   }
+  // All markups go to Connect in one addTextMarkup call (chunks of MARKUP_CHUNK, in sequence), not one call per cast
+  // unit: "Show all" on 1028 (108 cast units) made ~108 serial bridge round trips, 2-10 s on a phone with the tags
+  // appearing one by one. The returned ids are split back per cast unit by how many markups each one sent; existing
+  // ids are reused (replace in place) and the surplus ids of all cast units go in one removeMarkups (sweep 18.11.2026).
   async function addTags(groups) {
-    let n = 0;
+    const list = [], parts = [], extra = [];
     for (const g of groups) {
       const ms = markupsFor(g, state.units.indexOf(g));
-      if (!ms.length) continue;
+      if (!ms.length) continue;   // no geometry: keep whatever tag it had, as before
       const old = state.tags.get(g.key) || [];
       ms.forEach((m, k) => { if (old[k] != null) m.id = old[k]; });
-      const extra = old.slice(ms.length);
-      if (extra.length) await state.api.markup.removeMarkups(extra);
-      const res = (await state.api.markup.addTextMarkup(ms)) || [];
-      state.tags.set(g.key, res.map((r) => r && r.id).filter((id) => id != null));
-      n++;
+      extra.push(...old.slice(ms.length));
+      parts.push({ g, count: ms.length });
+      list.push(...ms);
     }
-    return n;
+    if (!list.length) return 0;
+    if (extra.length) await state.api.markup.removeMarkups(extra);
+    const res = [];
+    for (let i = 0; i < list.length; i += MARKUP_CHUNK) {
+      const out = (await state.api.markup.addTextMarkup(list.slice(i, i + MARKUP_CHUNK))) || [];
+      // keep positions aligned with the sent list even if Connect returns a short answer
+      for (let k = 0; k < Math.min(MARKUP_CHUNK, list.length - i); k++) res.push(out[k]);
+    }
+    let at = 0;
+    for (const { g, count } of parts) {
+      state.tags.set(g.key, res.slice(at, at + count).map((r) => r && r.id).filter((id) => id != null));
+      at += count;
+    }
+    return parts.length;
   }
   async function removeTags(keys) {
     const ids = keys.flatMap((k) => state.tags.get(k) || []);
@@ -510,7 +615,9 @@
   $("btnShowAll").onclick = () => guarded(showAll);
   $("btnClear").onclick = () => guarded(clearAll);
   $("btnClearFocus").onclick = () => guarded(clearFocus);
-  $("btnReload").onclick = () => guarded(async () => { await clearFocus(); await removeTags([...state.tags.keys()]); await loadCastUnits(); await applyColours(); });
+  // through runLoad, so a click while a model event's read runs does not start a second, overlapping read (sweep 18.11.2026);
+  // with colours off the model colours are still reset, as before
+  $("btnReload").onclick = async () => { await guarded(clearFocus); await runLoad(true); if (!state.coloured) await guarded(applyColours); };
   $("chkColour").onchange = (e) => guarded(async () => {
     state.coloured = e.target.checked;
     if (state.focusKey == null) await applyColours();
@@ -549,13 +656,9 @@
       return;
     }
     if (event === "viewer.onModelStateChanged" && state.api) {
-      setStatus(L2("Моделите са променени, елементите се четат отново…", "Models changed, reading cast units again…"));
+      // the status line says "reading again" only when the models really changed (loadOnce)
       clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => guarded(async () => {
-        await removeTags([...state.tags.keys()]);
-        await loadCastUnits();
-        if (state.coloured) await applyColours();
-      }), 1500);
+      reloadTimer = setTimeout(() => runLoad(false), 1500);
     }
   }
 
@@ -585,9 +688,11 @@
       const p = await api.project.getProject();
       ArstenDiag.set({ panel: "Cast unit tags (castunit-tags)", projectId: p && p.id, redact: [user], lang: () => ui });
     }).catch(() => {});   // A23
-    await guarded(loadCastUnits);
+    try { const p = await api.project.getProject(); state.projectId = p && p.id; } catch {}   // key of the "no cast units" marker
+    await runLoad(true);
   }
-  window.CastUnitTagsApp = { start, state };   // used by demo.js
+  // reload / refresh / onEvent: for the node tests (a model event, a forced read)
+  window.CastUnitTagsApp = { start, state, onEvent: (ev, data) => onEvent(ev, data), reload: () => runLoad(false), refresh: () => runLoad(true) };   // used by demo.js
 
   if (window.parent === window) {
     if (/[?&]demo\b/.test(location.search)) {

@@ -178,6 +178,7 @@
   //    create something in Core: a folder, an upload, a commit, an object link) only on a 429 that carries Retry-After,
   //    which the service refused without doing it. The error that comes out carries noRetry: true (no second retry in a
   //    caller's mapLimit);
+  //  - a 502 / 504 (gateway blip) the same way, but only for a GET (sweep 18.11.2026);
   //  - each try is counted as service "core" by window.ArstenPerf (shared/arsten-perf.js) when loaded and switched on.
   const TIMEOUT_MS = 30000, UPLOAD_TIMEOUT_MS = 120000, RETRY_TRIES = 3;
   const TIMEOUT_TEXT = "Connect не отговаря (време за изчакване)";
@@ -191,7 +192,11 @@
     return retryAfter != null && retryAfter !== "" && isFinite(ra) && ra >= 0 ? Math.min(ra * 1000, 8000)
       : Math.min(500 * 2 ** attempt, 8000) * (0.75 + Math.random() * 0.5);
   }
+  // sweep 18.11.2026: a 502 / 504 from Trimble's gateway is tried again too, but only for a GET (a listing, a downloadurl,
+  // a read: safe to repeat); a POST / PUT / PATCH / DELETE that got one may have gone through, so it is left as it was
+  const gatewayBlip = (method, status) => (status === 502 || status === 504) && String(method).toUpperCase() === "GET";
   function mayRetry(method, status, retryAfter) {
+    if (gatewayBlip(method, status)) return true;
     if (status !== 429 && status !== 503) return false;
     return String(method).toUpperCase() !== "POST" || (status === 429 && retryAfter != null);
   }
@@ -230,7 +235,7 @@
       catch (e) { if (h) p.end(h, e && e.timeout ? "timeout" : 0); throw e; }
       if (h) p.end(h, got.res.status);
       const st = got.res.status;
-      if (st !== 429 && st !== 503) return got;
+      if (st !== 429 && st !== 503 && !gatewayBlip(method, st)) return got;
       const ra = parseRetryAfter(got.res);
       if (tries < (o.tries || RETRY_TRIES) && mayRetry(method, st, ra)) {
         if (p && p.retry) p.retry("core", method, o.path);
@@ -301,7 +306,11 @@
    * Access of the current user for an app kind. Fail closed: any error -> allowed false with the reason.
    * @returns {allowed, role, reason, user, groupsFound, error?}
    */
-  async function check({ api, getToken, app = "execution", config, fetchImpl, storage }) {
+  // sweep 18.11.2026: a passing network fault (a 30 s timeout on a phone, one 502 / 504 from Core) is tried once more
+  // after RETRY_PAUSE_MS before the panel says anything; it locked site staff out with "Нямате достъп" before.
+  const RETRY_PAUSE_MS = 2000;
+  const passing = (e) => !!e && (e.timeout === true || (e.status === 0 && /не отговаря|timed? ?out/i.test(String(e.message || ""))) || (Number(e.status) >= 500 && Number(e.status) <= 599));
+  async function check({ api, getToken, app = "execution", config, fetchImpl, storage, retryPauseMs }) {
     const cfg = conf(config);
     let user = null, project = null;
     try {
@@ -323,7 +332,14 @@
         } catch {}
       }
       if (!res) {
-        const data = await loadProjectAccess({ projectId: project.id, location: project.location, getToken, config: cfg, fetchImpl });
+        const read = () => loadProjectAccess({ projectId: project.id, location: project.location, getToken, config: cfg, fetchImpl });
+        let data;
+        try { data = await read(); }
+        catch (e) {
+          if (!passing(e)) throw e;
+          await new Promise((r) => setTimeout(r, retryPauseMs == null ? RETRY_PAUSE_MS : retryPauseMs));
+          data = await read();
+        }
         const r = resolveRole({ user, projectUsers: data.projectUsers, groups: data.groups }, config);
         res = { role: r.role, roles: r.roles || [], roleGroups: r.roleGroups || {}, reason: r.reason, group: r.group || null, caps: r.caps || [], groupsFound: data.groupsFound };
         if (res.role !== "none") {
@@ -358,10 +374,13 @@
   };
   const TEXT = {
     bg: { title: "Нямате достъп", ask: "Обърнете се към администратора на проекта.", error: "Правата не можаха да бъдат проверени",
+      // sweep 18.11.2026: the check itself failed (network, Connect) - not "no access"
+      errTitle: "Правата не можаха да се проверят", errAsk: "Проверете връзката и натиснете „Опитай пак“.", again: "Опитай пак", cause: "Причина",
       notMember: "Не сте член на проекта.", yourRole: "Вашата роля", noGroup: "не сте в нито една група на проекта, която дава роля",
       viaGroup: "от група", needs: "Този инструмент е за", retry: "Провери отново", diag: "Копирай диагностика",
       wait: "Ако току-що сте добавени в група, Connect може да има нужда от няколко минути." },
     en: { title: "No access", ask: "Ask the project admin.", error: "Your access could not be checked",
+      errTitle: "Your access could not be checked", errAsk: "Check the connection and try again.", again: "Try again", cause: "Cause",
       notMember: "You are not a project member.", yourRole: "Your role", noGroup: "you are in no project group that gives a role",
       viaGroup: "from group", needs: "This tool is for", retry: "Check again", diag: "Copy diagnostics",
       wait: "If you were just added to a group, Connect may need a few minutes." },
@@ -406,12 +425,16 @@
   }
   function renderDenied(container, lang, access) {
     logDenied(access);
-    const t = TEXT[lang === "en" ? "en" : "bg"];
+    const t = TEXT[lang === "en" ? "en" : "bg"], other = TEXT[lang === "en" ? "bg" : "en"];
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    // sweep 18.11.2026: when the check itself failed (role "unknown": network, Connect) the user is told to check the
+    // connection and try again - not "Нямате достъп, обърнете се към администратора" for what was a weak signal
+    const failed = !!access && access.role === "unknown";
+    const lines = failed ? (access.error ? [`${t.cause}: ${access.error}`] : []) : deniedReason(lang, access);
     container.innerHTML = `<div style="padding:16px;font:13px/1.45 Ubuntu,'Segoe UI',system-ui,sans-serif;color:#1f1f1f">
-      <div style="font-size:15px;font-weight:600;margin-bottom:6px">${esc(t.title)} / ${esc(TEXT[lang === "en" ? "bg" : "en"].title)}</div>
-      <div>${esc(t.ask)}</div>${deniedReason(lang, access).map((l) => `<div style="margin-top:6px;font-size:12px;color:#6b6b6b">${esc(l)}</div>`).join("")}
-      <button type="button" data-arsten-retry style="margin-top:12px;font:inherit;font-size:12px;padding:4px 10px;border:1px solid #1f1f1f;background:#1f1f1f;color:#fff;cursor:pointer;border-radius:0">${esc(t.retry)}</button>${diagButton(t)}</div>`;
+      <div style="font-size:15px;font-weight:600;margin-bottom:6px">${esc(failed ? t.errTitle : t.title)} / ${esc(failed ? other.errTitle : other.title)}</div>
+      <div>${esc(failed ? t.errAsk : t.ask)}</div>${lines.map((l) => `<div style="margin-top:6px;font-size:12px;color:#6b6b6b">${esc(l)}</div>`).join("")}
+      <button type="button" data-arsten-retry style="margin-top:12px;font:inherit;font-size:14px;min-height:40px;padding:8px 14px;border:1px solid #1f1f1f;background:#1f1f1f;color:#fff;cursor:pointer;border-radius:0">${esc(failed ? t.again : t.retry)}</button>${diagButton(t)}</div>`;
     const b = typeof container.querySelector === "function" ? container.querySelector("[data-arsten-retry]") : null;
     if (b) b.onclick = () => {
       memo.clear();

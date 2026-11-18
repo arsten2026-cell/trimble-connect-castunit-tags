@@ -58,6 +58,15 @@
   #btnShowSel { white-space:nowrap; padding:2px 6px; }
   #txtFilter { flex:1; min-width:0; font:inherit; font-size:12px; padding:3px 6px; border:1px solid var(--line); border-radius:0; background:#fff; }
   #filterActs { align-items:center; }
+  /* phones and tablets on site (sweep 18.11.2026, as Тактове): the segmented Tag / Select / Focus buttons and the chip
+     buttons were 18-20 px high, and the 12 px filter box made iOS zoom the page on focus (needs 16 px) */
+  @media (pointer: coarse) {
+    button, button.small, select, input[type=number] { min-height:40px; }
+    .acts button.small, .chip button.small, button.inspect { padding:6px 12px; font-size:14px; min-height:40px; }
+    #txtFilter { font-size:16px; min-height:40px; }
+    label.chk { min-height:40px; font-size:14px; }
+    input[type=checkbox] { width:22px; height:22px; }
+  }
   #filterActs button.small + button.small { margin-left:-7px; }
   .warn { background:#fff4e5; border:1px solid #f0c48a; padding:8px; font-size:12px; margin-top:6px; }
   .empty { color:var(--muted); font-size:12px; padding:8px 0; }
@@ -115,10 +124,10 @@
 <script src="https://cdn.jsdelivr.net/npm/trimble-connect-workspace-api@0.3.38/dist/iife/trimbleconnect.workspace.api.js" integrity="sha384-lFiNt/56q6HnUNbuy0WHO3NP6BkQjY4EH8+5eELYVfnhkB42snRTmSa3UOAlX9gg" crossorigin="anonymous"></script>
 <script src="arsten-perf.js?v=21f7454938"></script>
 <script src="arsten-diag.js?v=bb0c6351fe"></script>
-<script src="arsten-i18n.js?v=de006467e2"></script>
-<script src="arsten-access.js?v=253829d007"></script>
+<script src="arsten-i18n.js?v=c58f01c9fc"></script>
+<script src="arsten-access.js?v=fad565fcbe"></script>
 <script src="common.js?v=81e163f7cb"></script>
-<script src="castunits.js?v=6772aa8f23"></script>
-<script src="app.js?v=a2f4bc19eb"></script>
+<script src="castunits.js?v=e0db76ef95"></script>
+<script src="app.js?v=13bb18f241"></script>
 </body>
 </html>
